@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Ruler, Check, Edit, TriangleAlert, Save } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { RoofVisualization } from './RoofVisualization';
 
 interface GeometryTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -30,7 +31,6 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
   const handleConfirm = () => {
     if (onUpdate) {
       const updatedGeo = { ...geo, userConfirmed: true, confidence: 1.0 };
-      // Apply edited values
       if (editing) {
         Object.entries(values).forEach(([key, val]) => {
           if (key in updatedGeo) {
@@ -136,13 +136,9 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
         </table>
       </SectionCard>
 
-      <SectionCard title="Geometriemodell" subtitle="Parametriertes 2D-Modell des Gebäudes">
-        <div className="aspect-[2/1] rounded-lg border-2 border-dashed bg-muted/10 flex items-center justify-center">
-          <div className="text-center space-y-1.5">
-            <Ruler className="h-10 w-10 text-muted-foreground/30 mx-auto" />
-            <p className="text-xs text-muted-foreground">2D-Schnittdarstellung mit Maßketten</p>
-            <p className="text-[10px] text-muted-foreground/60">{geo.isSymmetric ? 'Symmetrisch' : 'Asymmetrisch'}</p>
-          </div>
+      <SectionCard title="Schnittdarstellung" subtitle="Parametriertes 2D-Modell des Dachtragwerks">
+        <div className="rounded-lg border bg-card/50 p-4">
+          <RoofVisualization project={project} width={700} height={350} />
         </div>
       </SectionCard>
     </div>

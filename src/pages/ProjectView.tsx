@@ -122,16 +122,18 @@ const ProjectView = () => {
           </div>
 
           <div className="flex-1 overflow-auto">
-            <TabsContent value="plan" className="m-0 h-full"><PlanTab project={project} projectId={dbProject?.id} /></TabsContent>
+            <TabsContent value="plan" className="m-0 h-full">
+              <PlanTab project={project} projectId={dbProject?.id} onAnalysisComplete={loadProject} />
+            </TabsContent>
             <TabsContent value="extraction" className="m-0 h-full"><ExtractionTab project={project} /></TabsContent>
             <TabsContent value="address" className="m-0 h-full"><AddressTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="geometry" className="m-0 h-full"><GeometryTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="structure" className="m-0 h-full"><StructureTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="loads" className="m-0 h-full"><LoadsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="materials" className="m-0 h-full"><MaterialsTab project={project} onUpdate={updateProject} /></TabsContent>
-            <TabsContent value="calculation" className="m-0 h-full"><CalculationTab project={project} /></TabsContent>
+            <TabsContent value="calculation" className="m-0 h-full"><CalculationTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} /></TabsContent>
-            <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} /></TabsContent>
+            <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} projectId={dbProject?.id} /></TabsContent>
           </div>
         </Tabs>
       </div>
