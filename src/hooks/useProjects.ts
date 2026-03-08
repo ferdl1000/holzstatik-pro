@@ -25,7 +25,8 @@ export function useProjects() {
 
   async function createProject(name: string, description: string): Promise<string | null> {
     if (!user) return null;
-    const projectData = { ...EMPTY_PROJECT, name, description };
+    // REAL-DATA-ONLY: Empty project, no pre-seeded loads or members
+    const projectData = { ...EMPTY_PROJECT, name, description, loadCases: [], members: [], calculations: [] };
     const { data, error } = await supabase.from('projects').insert({
       user_id: user.id,
       name,
