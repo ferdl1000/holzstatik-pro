@@ -1,12 +1,14 @@
-import type { Project } from '@/types/project';
+import { useState } from 'react';
+import type { Project, LoadCase } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { ConfidenceBadge } from '@/components/shared/ConfidenceBadge';
 import { SourceTag } from '@/components/shared/SourceTag';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Edit, Save, Snowflake, Wind, Weight, ArrowDown } from 'lucide-react';
+import { Edit, Save, Snowflake, Wind, Weight, ArrowDown, Check } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
-interface LoadsTabProps { project: Project; }
+interface LoadsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
 const LOAD_ICONS: Record<string, typeof Snowflake> = {
   snow: Snowflake,
@@ -16,7 +18,24 @@ const LOAD_ICONS: Record<string, typeof Snowflake> = {
   maintenance: Weight,
 };
 
-export function LoadsTab({ project }: LoadsTabProps) {
+export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
+  const [editing, setEditing] = useState(false);
+  const [editedLoads, setEditedLoads] = useState<Record<string, number>>({});
+  const { toast } = useToast();
+
+  const handleSave = () => {
+    if (onUpdate) {
+      const updated = project.loadCases.map(lc => ({
+        ...lc,
+        value: editedLoads[lc.id] ?? lc.value,
+        userModified: editedLoads[lc.id] !== undefined,
+      }));
+      onUpdate({ loadCases: updated });
+    }
+    setEditing(false);
+    toast({ title: 'Lasten gespeichert' });
+  };
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <SectionCard title="Standortbezogene Lastannahmen" subtitle="Lasten-Agent Österreich – basierend auf ÖNORM / Eurocode">
@@ -64,7 +83,14 @@ export function LoadsTab({ project }: LoadsTabProps) {
                   <td className="text-xs text-muted-foreground capitalize">{lc.type}</td>
                   <td>
                     <div className="flex items-center gap-1.5">
-                      <Input value={lc.value} className="input-technical w-20 h-7 text-xs" readOnly />
+                      <Input
+                        value={editing ? (editedLoads[lc.id] ?? lc.value) : lc.value}
+                        className="input-technical w-20 h-7 text-xs"
+                        readOnly={!editing}
+                        type="number"
+                        step="0.01"
+                        onChange={(e) => setEditedLoads({ ...editedLoads, [lc.id]: parseFloat(e.target.value) || 0 })}
+                      />
                       <span className="text-xs text-muted-foreground">{lc.unit}</span>
                     </div>
                   </td>
@@ -84,8 +110,23 @@ export function LoadsTab({ project }: LoadsTabProps) {
         </table>
 
         <div className="flex gap-2 pt-4 mt-4 border-t">
-          <Button variant="outline" size="sm" className="gap-1.5"><Edit className="h-3.5 w-3.5" />Lasten bearbeiten</Button>
-          <Button size="sm" className="gap-1.5"><Save className="h-3.5 w-3.5" />Lasten bestätigen</Button>
+          {editing ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => { setEditing(false); setEditedLoads({}); }}>Abbrechen</Button>
+              <Button size="sm" className="gap-1.5" onClick={handleSave}>
+                <Save className="h-3.5 w-3.5" />Lasten speichern
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setEditing(true)}>
+                <Edit className="h-3.5 w-3.5" />Lasten bearbeiten
+              </Button>
+              <Button size="sm" className="gap-1.5" onClick={() => toast({ title: 'Lasten bestätigt' })}>
+                <Check className="h-3.5 w-3.5" />Lasten bestätigen
+              </Button>
+            </>
+          )}
         </div>
       </SectionCard>
     </div>
