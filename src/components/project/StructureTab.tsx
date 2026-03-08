@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Check, Building2, ArrowRight, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { RoofVisualization } from './RoofVisualization';
 
 interface StructureTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -77,6 +78,27 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
         )}
       </SectionCard>
 
+      {/* SVG Visualization */}
+      <SectionCard title="Tragwerksschema" subtitle="2D-Schnittdarstellung des Dachtragwerks">
+        <div className="rounded-lg border bg-card/50 p-4">
+          <RoofVisualization project={project} width={700} height={350} />
+        </div>
+        <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-0.5 bg-primary rounded" />
+            <span>Tragstruktur</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-accent" />
+            <span>Pfetten / Auflager</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-0.5 border-t border-dashed border-primary" />
+            <span>Stützen</span>
+          </div>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Tragwerkssystem" subtitle="Vorgeschlagene Dachkonstruktion">
         <div className="space-y-4">
           <div className={cn(
@@ -125,6 +147,26 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
             </div>
           )}
         </div>
+      </SectionCard>
+
+      {/* Members overview */}
+      <SectionCard title="Bauteile" subtitle="Erkannte und vorgeschlagene Tragwerksbauteile">
+        <table className="data-table">
+          <thead>
+            <tr><th>Bauteil</th><th>Typ</th><th>Querschnitt</th><th>Länge</th><th>Anzahl</th></tr>
+          </thead>
+          <tbody>
+            {project.members.map(m => (
+              <tr key={m.id}>
+                <td className="font-medium text-sm">{m.name}</td>
+                <td className="text-xs text-muted-foreground capitalize">{m.type}</td>
+                <td className="value-display">{m.crossSection} mm</td>
+                <td className="value-display">{m.length} m</td>
+                <td className="value-display">{m.quantity}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </SectionCard>
     </div>
   );

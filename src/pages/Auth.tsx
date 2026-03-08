@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Building2, LogIn, UserPlus, ArrowLeft } from 'lucide-react';
+import { Building2, LogIn, UserPlus, ArrowLeft, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const Auth = () => {
@@ -44,7 +44,7 @@ const Auth = () => {
     } else {
       const { error } = await signIn(email, password);
       if (error) {
-        toast({ title: 'Fehler', description: error.message, variant: 'destructive' });
+        toast({ title: 'Anmeldung fehlgeschlagen', description: error.message, variant: 'destructive' });
       } else {
         navigate('/');
       }
@@ -57,12 +57,13 @@ const Auth = () => {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center">
           <div className="flex items-center justify-center gap-2 mb-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
-              <Building2 className="h-6 w-6 text-primary-foreground" />
+            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary shadow-lg">
+              <Building2 className="h-7 w-7 text-primary-foreground" />
             </div>
           </div>
           <h1 className="text-2xl font-bold tracking-tight">HolzStatik</h1>
           <p className="text-sm text-muted-foreground mt-1">Dachtragwerk-Vorbemessung Österreich</p>
+          <p className="text-xs text-muted-foreground/60 mt-0.5">Eurocode 5 / ÖNORM B 1995-1-1</p>
         </div>
 
         <div className="rounded-xl border bg-card p-6 shadow-sm">
@@ -76,7 +77,7 @@ const Auth = () => {
             {mode === 'signup' && (
               <div className="space-y-1.5">
                 <Label>Name</Label>
-                <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Ihr Name" />
+                <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="DI Max Mustermann" />
               </div>
             )}
             <div className="space-y-1.5">
@@ -91,9 +92,15 @@ const Auth = () => {
             )}
 
             <Button type="submit" className="w-full gap-2" disabled={loading}>
-              {mode === 'login' && <><LogIn className="h-4 w-4" />Anmelden</>}
-              {mode === 'signup' && <><UserPlus className="h-4 w-4" />Registrieren</>}
-              {mode === 'forgot' && 'Reset-Link senden'}
+              {loading ? (
+                <span className="animate-pulse">Laden…</span>
+              ) : (
+                <>
+                  {mode === 'login' && <><LogIn className="h-4 w-4" />Anmelden</>}
+                  {mode === 'signup' && <><UserPlus className="h-4 w-4" />Registrieren</>}
+                  {mode === 'forgot' && 'Reset-Link senden'}
+                </>
+              )}
             </Button>
           </form>
 
@@ -119,9 +126,26 @@ const Auth = () => {
           </div>
         </div>
 
-        <p className="text-center text-[10px] text-muted-foreground leading-relaxed max-w-xs mx-auto">
-          Vorbemessung – keine rechtsverbindliche Statik. Freigabe durch qualifizierte Fachperson erforderlich.
-        </p>
+        {/* Feature highlights */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'PDF-Analyse', desc: 'Automatische Planerkennung' },
+            { label: 'Holzbemessung', desc: 'EC5 / ÖNORM Nachweise' },
+            { label: 'Prüfprotokoll', desc: 'Transparenter Audit Trail' },
+          ].map(f => (
+            <div key={f.label} className="rounded-lg border bg-card/50 p-3 text-center">
+              <p className="text-xs font-medium">{f.label}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">{f.desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-start gap-2 mx-auto max-w-xs">
+          <Shield className="h-3.5 w-3.5 text-status-yellow shrink-0 mt-0.5" />
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            Vorbemessung – keine rechtsverbindliche Statik. Endfreigabe durch qualifizierte Fachperson (Ziviltechniker, Statiker) erforderlich.
+          </p>
+        </div>
       </div>
     </div>
   );
