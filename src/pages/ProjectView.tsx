@@ -125,7 +125,7 @@ const ProjectView = () => {
             <TabsContent value="plan" className="m-0 h-full">
               <PlanTab project={project} projectId={dbProject?.id} onAnalysisComplete={loadProject} />
             </TabsContent>
-            <TabsContent value="extraction" className="m-0 h-full"><ExtractionTab project={project} /></TabsContent>
+            <TabsContent value="extraction" className="m-0 h-full"><ExtractionTab project={project} projectId={dbProject?.id} /></TabsContent>
             <TabsContent value="address" className="m-0 h-full"><AddressTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="geometry" className="m-0 h-full"><GeometryTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="structure" className="m-0 h-full"><StructureTab project={project} onUpdate={updateProject} /></TabsContent>
