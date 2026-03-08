@@ -223,27 +223,220 @@ const Admin = () => {
               </div>
             </SectionCard>
 
-            {/* Predefined settings hints */}
-            <SectionCard title="Empfohlene Konfiguration" subtitle="Diese API-Keys werden für volle Funktionalität benötigt">
-              <div className="space-y-2 text-sm">
+            {/* Recommended API keys with full details and links */}
+            <SectionCard title="Empfohlene Konfiguration" subtitle="Diese API-Keys werden für volle Funktionalität benötigt – mit Anleitungen und Direktlinks">
+              <div className="space-y-4 text-sm">
                 {[
-                  { key: 'OCR_API_KEY', desc: 'OCR-Service für Plananalyse (z.B. Google Vision, Azure Document Intelligence)' },
-                  { key: 'GEOCODING_API_KEY', desc: 'Geocoding-Service für Adressauflösung und Kartenansicht' },
-                  { key: 'SNOW_LOAD_API', desc: 'Schneelast-Datenbank Österreich (ÖNORM B 1991-1-3)' },
-                  { key: 'WIND_LOAD_API', desc: 'Windlast-Datenbank Österreich (ÖNORM B 1991-1-4)' },
+                  {
+                    key: 'OCR_API_KEY',
+                    title: 'OCR-Service für Plananalyse',
+                    desc: 'Wird verwendet um gescannte PDF-Einreichpläne per OCR zu analysieren (Texterkennung, Maßextraktion, Symbole). Empfohlen: Google Cloud Vision API oder Azure Document Intelligence.',
+                    steps: [
+                      'Google Vision: Google Cloud Console öffnen → APIs & Dienste → „Cloud Vision API" aktivieren → Anmeldedaten → API-Schlüssel erstellen.',
+                      'Azure: Azure-Portal → „Cognitive Services" → „Document Intelligence" erstellen → Schlüssel & Endpunkt kopieren.',
+                    ],
+                    links: [
+                      { label: 'Google Cloud Vision API', url: 'https://console.cloud.google.com/apis/library/vision.googleapis.com' },
+                      { label: 'Azure Document Intelligence', url: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesFormRecognizer' },
+                      { label: 'Google Vision Preise', url: 'https://cloud.google.com/vision/pricing' },
+                      { label: 'Azure Preise', url: 'https://azure.microsoft.com/de-de/pricing/details/ai-document-intelligence/' },
+                    ],
+                    note: 'Hinweis: Die integrierte KI-Analyse (Lovable AI / Gemini) funktioniert bereits ohne diesen Key für Basis-OCR. Dieser Key ist nur nötig, wenn Sie einen dedizierten OCR-Dienst mit höherer Genauigkeit verwenden möchten.',
+                  },
+                  {
+                    key: 'GEOCODING_API_KEY',
+                    title: 'Geocoding-Service für Adressauflösung',
+                    desc: 'Wird verwendet um die erkannte Bauadresse in Koordinaten aufzulösen und auf einer Karte anzuzeigen. Nötig für standortbezogene Lastermittlung (Schneelastzone, Windzone).',
+                    steps: [
+                      'Google Maps Platform: Console öffnen → „Geocoding API" aktivieren → API-Schlüssel erstellen → Schlüssel auf Geocoding API beschränken.',
+                      'Alternativ: OpenCage Geocoding (kostenloser Tarif für 2.500 Abfragen/Tag) → Konto erstellen → API-Key kopieren.',
+                    ],
+                    links: [
+                      { label: 'Google Geocoding API', url: 'https://console.cloud.google.com/apis/library/geocoding-backend.googleapis.com' },
+                      { label: 'OpenCage Geocoding', url: 'https://opencagedata.com/api' },
+                      { label: 'Google Maps Preise', url: 'https://developers.google.com/maps/documentation/geocoding/usage-and-billing' },
+                    ],
+                    note: 'Tipp: Google bietet $200 monatliches Gratisguthaben. OpenCage hat einen kostenlosen Tarif für kleine Projekte.',
+                  },
+                  {
+                    key: 'SNOW_LOAD_API',
+                    title: 'Schneelast-Datenbank Österreich (ÖNORM B 1991-1-3)',
+                    desc: 'Liefert die charakteristische Schneelast sk basierend auf Standort und Seehöhe gemäß ÖNORM B 1991-1-3. Ohne diesen Dienst muss die Schneelastzone manuell eingegeben werden.',
+                    steps: [
+                      'Austrian Standards: standards.at besuchen → Normen-Download oder API-Zugang für ÖNORM B 1991-1-3 prüfen.',
+                      'Alternativ: ZAMG/GeoSphere Austria Klimadaten-API → Registrierung → API-Key anfordern.',
+                      'Fallback: Manuelle Eingabe der Schneelastzone (1–4) und Seehöhe im Lasten-Tab – ohne API-Key möglich.',
+                    ],
+                    links: [
+                      { label: 'Austrian Standards (ÖNORM)', url: 'https://www.austrian-standards.at/' },
+                      { label: 'GeoSphere Austria Daten', url: 'https://data.hub.geosphere.at/' },
+                      { label: 'ÖNORM B 1991-1-3 Info', url: 'https://www.austrian-standards.at/de/shop/onorm-b-1991-1-3-2018-04-01~p2390182' },
+                    ],
+                    note: 'Hinweis: Aktuell ist keine öffentliche REST-API für österr. Schneelastzonen verfügbar. Die App berechnet sk intern nach Tabelle wenn Zone + Seehöhe manuell eingegeben werden.',
+                  },
+                  {
+                    key: 'WIND_LOAD_API',
+                    title: 'Windlast-Datenbank Österreich (ÖNORM B 1991-1-4)',
+                    desc: 'Liefert den Grundwert der Windgeschwindigkeit vb,0 basierend auf Standort gemäß ÖNORM B 1991-1-4. Ohne diesen Dienst muss die Windzone manuell eingegeben werden.',
+                    steps: [
+                      'Austrian Standards: Zugang zu ÖNORM B 1991-1-4 → Windzonenkarte und Tabellenwerte.',
+                      'Alternativ: ZAMG/GeoSphere Austria Wind-Klimadaten → API-Zugang.',
+                      'Fallback: Manuelle Eingabe der Windzone (1–4) und Geländekategorie im Lasten-Tab.',
+                    ],
+                    links: [
+                      { label: 'Austrian Standards (ÖNORM)', url: 'https://www.austrian-standards.at/' },
+                      { label: 'GeoSphere Austria Daten', url: 'https://data.hub.geosphere.at/' },
+                      { label: 'ÖNORM B 1991-1-4 Info', url: 'https://www.austrian-standards.at/de/shop/onorm-b-1991-1-4-2019-05-15~p2536009' },
+                    ],
+                    note: 'Hinweis: Wie bei Schneelasten ist keine öffentliche REST-API verfügbar. Die App berechnet qp intern nach Tabelle wenn Zone + Geländekategorie manuell gesetzt werden.',
+                  },
                 ].map((hint) => (
-                  <div key={hint.key} className="flex items-center justify-between rounded-md bg-muted/30 p-3">
-                    <div>
-                      <span className="font-mono text-xs font-medium">{hint.key}</span>
-                      <p className="text-xs text-muted-foreground">{hint.desc}</p>
+                  <div key={hint.key} className="rounded-lg border bg-muted/20 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-mono text-xs font-bold text-primary">{hint.key}</span>
+                        <p className="text-sm font-medium mt-0.5">{hint.title}</p>
+                      </div>
+                      {settings.some(s => s.key === hint.key) ? (
+                        <Badge className="bg-status-green text-status-green-bg">Konfiguriert</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-status-yellow border-status-yellow">Nicht konfiguriert</Badge>
+                      )}
                     </div>
-                    {settings.some(s => s.key === hint.key) ? (
-                      <Badge className="bg-status-green text-status-green-bg">Konfiguriert</Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-status-yellow border-status-yellow">Nicht konfiguriert</Badge>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{hint.desc}</p>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium">Einrichtung Schritt für Schritt:</p>
+                      <ol className="list-decimal list-inside text-xs text-muted-foreground space-y-0.5">
+                        {hint.steps.map((step, i) => <li key={i}>{step}</li>)}
+                      </ol>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {hint.links.map((link) => (
+                        <a
+                          key={link.url}
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 hover:text-primary/80"
+                        >
+                          ↗ {link.label}
+                        </a>
+                      ))}
+                    </div>
+                    {hint.note && (
+                      <p className="text-[11px] text-muted-foreground/80 italic border-l-2 border-primary/30 pl-2">{hint.note}</p>
                     )}
                   </div>
                 ))}
+              </div>
+            </SectionCard>
+
+            {/* AI Model Selection */}
+            <SectionCard title="KI-Modellauswahl" subtitle="Wählen Sie das bevorzugte KI-Modell für die Plananalyse und den Berichts-Agenten">
+              <div className="space-y-4">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Die App nutzt standardmäßig <strong>Lovable AI (Gemini 2.5 Flash)</strong> – dafür ist kein eigener API-Key nötig.
+                  Optional können Sie ein eigenes KI-Modell eines Drittanbieters konfigurieren.
+                </p>
+
+                <div className="space-y-3">
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <p className="text-sm font-medium">Integriert (kein API-Key nötig)</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {[
+                        { model: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', note: 'Standard – schnell, multimodal, gut für OCR' },
+                        { model: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', note: 'Höchste Genauigkeit, langsamer, teurer' },
+                        { model: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', note: 'Schnellstes Modell, gut für einfache Aufgaben' },
+                        { model: 'openai/gpt-5-mini', label: 'GPT-5 Mini', note: 'Gutes Preis-Leistungs-Verhältnis, stark bei Reasoning' },
+                      ].map((m) => (
+                        <div key={m.model} className="rounded-md bg-muted/30 p-2.5">
+                          <p className="font-mono font-medium">{m.label}</p>
+                          <p className="text-muted-foreground mt-0.5">{m.note}</p>
+                          <p className="text-[10px] text-muted-foreground/60 mt-1 font-mono">{m.model}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/80 italic">
+                      Diese Modelle sind über Lovable AI verfügbar. Verbrauch wird über Ihr Lovable-Workspace-Guthaben abgerechnet.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <p className="text-sm font-medium">Eigener API-Key (optional)</p>
+                    <p className="text-xs text-muted-foreground">
+                      Falls Sie ein eigenes Modell verwenden möchten, tragen Sie den API-Key oben ein und wählen den Anbieter:
+                    </p>
+                    <div className="space-y-2">
+                      {[
+                        {
+                          key: 'OPENAI_API_KEY',
+                          provider: 'OpenAI',
+                          models: 'GPT-4o, GPT-4o-mini, GPT-5',
+                          link: 'https://platform.openai.com/api-keys',
+                          steps: 'platform.openai.com → Anmelden → API Keys → „Create new secret key" → Key kopieren',
+                        },
+                        {
+                          key: 'ANTHROPIC_API_KEY',
+                          provider: 'Anthropic (Claude)',
+                          models: 'Claude 3.5 Sonnet, Claude 3.5 Haiku, Claude 4',
+                          link: 'https://console.anthropic.com/settings/keys',
+                          steps: 'console.anthropic.com → Anmelden → Settings → API Keys → „Create Key" → Key kopieren',
+                        },
+                        {
+                          key: 'GOOGLE_AI_API_KEY',
+                          provider: 'Google AI Studio',
+                          models: 'Gemini 2.5 Pro/Flash (direkt, nicht über Lovable)',
+                          link: 'https://aistudio.google.com/app/apikey',
+                          steps: 'aistudio.google.com → Anmelden → „Get API key" → „Create API key" → Key kopieren',
+                        },
+                      ].map((p) => (
+                        <div key={p.key} className="rounded-md bg-muted/20 p-3 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-mono text-xs font-bold">{p.key}</span>
+                              <span className="text-xs text-muted-foreground ml-2">({p.provider})</span>
+                            </div>
+                            {settings.some(s => s.key === p.key) ? (
+                              <Badge className="bg-status-green text-status-green-bg text-[10px]">Konfiguriert</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px]">Nicht gesetzt</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">Modelle: {p.models}</p>
+                          <p className="text-xs text-muted-foreground">Anleitung: {p.steps}</p>
+                          <a href={p.link} target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline underline-offset-2 hover:text-primary/80">
+                            ↗ Direkt zum API-Key-Portal: {p.provider}
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-dashed p-4 space-y-2">
+                    <p className="text-sm font-medium">Lokale Modelle (Ollama)</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Für lokale/selbst gehostete Modelle (z.B. Llama 3, Mistral, Phi-3) können Sie Ollama verwenden.
+                      Die App unterstützt die OpenAI-kompatible API von Ollama.
+                    </p>
+                    <div className="text-xs space-y-1">
+                      <p><strong>Einrichtung:</strong></p>
+                      <ol className="list-decimal list-inside text-muted-foreground space-y-0.5">
+                        <li>Ollama installieren: <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer" className="text-primary underline">↗ ollama.com/download</a></li>
+                        <li>Modell herunterladen: <code className="bg-muted px-1 rounded">ollama pull llama3.1</code></li>
+                        <li>Server starten: <code className="bg-muted px-1 rounded">ollama serve</code> (Standard: http://localhost:11434)</li>
+                        <li>In den Einstellungen oben <code className="bg-muted px-1 rounded">OLLAMA_BASE_URL</code> = <code className="bg-muted px-1 rounded">http://localhost:11434</code> setzen</li>
+                      </ol>
+                    </div>
+                    <div className="flex gap-2">
+                      <a href="https://ollama.com/" target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline underline-offset-2">↗ Ollama Website</a>
+                      <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline underline-offset-2">↗ Modellbibliothek</a>
+                      <a href="https://github.com/ollama/ollama/blob/main/docs/api.md" target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline underline-offset-2">↗ API-Dokumentation</a>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/80 italic">
+                      Hinweis: Lokale Modelle sind nur für Entwickler-/Testumgebungen geeignet. Für Produktion empfehlen wir Lovable AI oder einen Cloud-Anbieter.
+                    </p>
+                  </div>
+                </div>
               </div>
             </SectionCard>
           </div>
