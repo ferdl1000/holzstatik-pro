@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   FileText, Scan, MapPin, Ruler, Building2, Weight,
-  TreePine, Calculator, CheckCircle, FileOutput
+  TreePine, Calculator, CheckCircle, FileOutput, ShieldAlert
 } from 'lucide-react';
 import { PlanTab } from '@/components/project/PlanTab';
 import { ExtractionTab } from '@/components/project/ExtractionTab';
@@ -18,8 +18,9 @@ import { CalculationTab } from '@/components/project/CalculationTab';
 import { ReviewTab } from '@/components/project/ReviewTab';
 import { ReportTab } from '@/components/project/ReportTab';
 import { supabase } from '@/integrations/supabase/client';
-import { MOCK_PROJECT } from '@/data/mockProject';
+import { EMPTY_PROJECT } from '@/data/mockProject';
 import type { Project } from '@/types/project';
+import { runFullValidation, countBySeverity } from '@/lib/validation';
 
 const TAB_CONFIG = [
   { key: 'plan', label: 'Plan', icon: FileText },
@@ -38,7 +39,7 @@ const ProjectView = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { id } = useParams<{ id: string }>();
   const activeTab = searchParams.get('tab') || 'plan';
-  const [project, setProject] = useState<Project>(MOCK_PROJECT);
+  const [project, setProject] = useState<Project>(EMPTY_PROJECT);
   const [dbProject, setDbProject] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -54,9 +55,9 @@ const ProjectView = () => {
       setDbProject(data);
       const pd = data.project_data as any;
       if (pd && pd.name) {
-        setProject({ ...MOCK_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
+        setProject({ ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
       } else {
-        setProject({ ...MOCK_PROJECT, id: data.id, name: data.name, description: data.description || '' });
+        setProject({ ...EMPTY_PROJECT, id: data.id, name: data.name, description: data.description || '' });
       }
     }
     setLoading(false);
@@ -74,11 +75,17 @@ const ProjectView = () => {
     }
   }, [project, dbProject]);
 
+  // Live validation counts for blocker banner
+  const blockerCount = useMemo(() => {
+    const issues = runFullValidation(project);
+    return countBySeverity(issues);
+  }, [project]);
+
   if (loading) {
     return (
       <AppLayout>
         <div className="flex items-center justify-center h-64">
-          <div className="animate-pulse-slow text-muted-foreground">Projekt laden…</div>
+          <div className="animate-pulse text-muted-foreground">Projekt laden…</div>
         </div>
       </AppLayout>
     );
@@ -87,6 +94,7 @@ const ProjectView = () => {
   return (
     <AppLayout>
       <div className="flex flex-col h-[calc(100vh-2.75rem)]">
+        {/* Header */}
         <div className="border-b bg-card px-6 py-3 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -95,7 +103,13 @@ const ProjectView = () => {
               <h2 className="font-semibold text-sm">{project.name}</h2>
               <StatusIndicator status={project.status} size="sm" />
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              {blockerCount.red > 0 && (
+                <span className="flex items-center gap-1 text-[hsl(var(--status-red))] font-medium">
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  {blockerCount.red} Blocker
+                </span>
+              )}
               <span className="font-mono">Schritt {project.currentStep}/10</span>
             </div>
           </div>
@@ -132,7 +146,7 @@ const ProjectView = () => {
             <TabsContent value="loads" className="m-0 h-full"><LoadsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="materials" className="m-0 h-full"><MaterialsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="calculation" className="m-0 h-full"><CalculationTab project={project} onUpdate={updateProject} /></TabsContent>
-            <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} /></TabsContent>
+            <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} projectId={dbProject?.id} /></TabsContent>
           </div>
         </Tabs>
