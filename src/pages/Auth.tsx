@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Building2, LogIn, UserPlus, ArrowLeft, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
-const Auth = () => {
+function Auth() {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
