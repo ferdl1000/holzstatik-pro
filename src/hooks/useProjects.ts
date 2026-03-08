@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Project } from '@/types/project';
-import { MOCK_PROJECT } from '@/data/mockProject';
+import { EMPTY_PROJECT } from '@/data/mockProject';
 
 export function useProjects() {
   const [projects, setProjects] = useState<any[]>([]);
@@ -26,14 +25,14 @@ export function useProjects() {
 
   async function createProject(name: string, description: string): Promise<string | null> {
     if (!user) return null;
-    const mockData = { ...MOCK_PROJECT, name, description, id: undefined };
+    const projectData = { ...EMPTY_PROJECT, name, description };
     const { data, error } = await supabase.from('projects').insert({
       user_id: user.id,
       name,
       description,
       status: 'yellow',
       current_step: 1,
-      project_data: mockData as any,
+      project_data: projectData as any,
     }).select('id').single();
     if (error || !data) return null;
     await loadProjects();
