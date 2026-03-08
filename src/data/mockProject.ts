@@ -1,5 +1,9 @@
 import type { Project, MaterialProfile } from '@/types/project';
 
+/**
+ * Referenz-Materialbibliothek – keine Projektdaten, sondern normative Kennwerte.
+ * Diese Werte stammen aus EN 338 / EN 14080 und dürfen als Bibliothek vorgehalten werden.
+ */
 export const DEFAULT_MATERIALS: MaterialProfile[] = [
   {
     id: 'mat-1',
@@ -40,8 +44,10 @@ export const DEFAULT_MATERIALS: MaterialProfile[] = [
 ];
 
 /**
- * Empty project template – no fake data.
- * Mock/demo data was removed to avoid presenting invented values as real.
+ * Leeres Projekt – KEINE vorausgefüllten Projektdaten.
+ * Lastfälle werden NICHT vorausgefüllt. Sie werden erst erzeugt, wenn
+ * ein bestätigter Standort vorliegt und der Benutzer die Lastermittlung auslöst.
+ * Materialien sind Referenzbibliothek, keine Projektdaten.
  */
 export const EMPTY_PROJECT: Project = {
   id: '',
@@ -52,18 +58,10 @@ export const EMPTY_PROJECT: Project = {
   status: 'yellow',
   currentStep: 1,
   documents: [],
-  loadCases: [
-    { id: 'lc-1', name: 'Eigengewicht Dachaufbau', type: 'permanent', value: 0.85, unit: 'kN/m²', source: 'Annahme: Ziegeldeckung + Lattung + Konterlattung + Folie', confidence: 0.70, isEditable: true, userModified: false, parameters: {} },
-    { id: 'lc-2', name: 'Schneelast', type: 'snow', value: 0, unit: 'kN/m²', source: 'Noch nicht berechnet – Standort erforderlich', confidence: 0, isEditable: true, userModified: false, parameters: { zone: '2' } },
-    { id: 'lc-3', name: 'Windlast (Druck)', type: 'wind', value: 0, unit: 'kN/m²', source: 'Noch nicht berechnet – Standort erforderlich', confidence: 0, isEditable: true, userModified: false, parameters: { zone: '2', terrainCategory: 'III' } },
-    { id: 'lc-4', name: 'Nutzlast (nicht begehbar)', type: 'variable', value: 0.50, unit: 'kN/m²', source: 'ÖNORM B 1991-1-1, Kat. H', confidence: 0.95, isEditable: true, userModified: false, parameters: {} },
-  ],
+  loadCases: [],
   materials: DEFAULT_MATERIALS,
   members: [],
   calculations: [],
   validationIssues: [],
   auditEntries: [],
 };
-
-/** @deprecated Use EMPTY_PROJECT for new projects. Kept for backward compat. */
-export const MOCK_PROJECT = EMPTY_PROJECT;
