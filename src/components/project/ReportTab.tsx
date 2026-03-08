@@ -1,18 +1,96 @@
+import { useState } from 'react';
 import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { Button } from '@/components/ui/button';
-import { FileText, Download, ClipboardList, TreePine, Shield, History } from 'lucide-react';
+import { FileText, Download, ClipboardList, TreePine, Shield, History, Loader2 } from 'lucide-react';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
+import { useAuditTrail } from '@/hooks/useAuditTrail';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 
-interface ReportTabProps { project: Project; }
+interface ReportTabProps { project: Project; projectId?: string; }
 
-export function ReportTab({ project }: ReportTabProps) {
+export function ReportTab({ project, projectId }: ReportTabProps) {
+  const { entries, loading: auditLoading } = useAuditTrail(projectId);
+  const [generating, setGenerating] = useState<string | null>(null);
+  const { toast } = useToast();
+
   const reports = [
-    { icon: FileText, title: 'Statik-Auszug', desc: 'Bemessungsergebnisse, Schnittgrößen und Nachweise', format: 'PDF' },
-    { icon: TreePine, title: 'Holzliste / Holzauszug', desc: 'Materialliste aller Holzbauteile mit Querschnitten und Mengen', format: 'PDF / CSV' },
-    { icon: Shield, title: 'Prüfprotokoll', desc: 'Alle Prüfschritte, Widersprüche und Freigabestatus', format: 'PDF' },
-    { icon: ClipboardList, title: 'Projektdokumentation', desc: 'Vollständige Projektübersicht mit allen Eingabedaten', format: 'PDF' },
+    { key: 'statik', icon: FileText, title: 'Statik-Auszug', desc: 'Bemessungsergebnisse, Schnittgrößen und Nachweise', format: 'PDF' },
+    { key: 'holzliste', icon: TreePine, title: 'Holzliste / Holzauszug', desc: 'Materialliste aller Holzbauteile mit Querschnitten und Mengen', format: 'PDF / CSV' },
+    { key: 'pruefprotokoll', icon: Shield, title: 'Prüfprotokoll', desc: 'Alle Prüfschritte, Widersprüche und Freigabestatus', format: 'PDF' },
+    { key: 'projektdoku', icon: ClipboardList, title: 'Projektdokumentation', desc: 'Vollständige Projektübersicht mit allen Eingabedaten', format: 'PDF' },
   ];
+
+  const handleExport = async (reportType: string) => {
+    if (!projectId) {
+      toast({ title: 'Fehler', description: 'Kein Projekt-ID', variant: 'destructive' });
+      return;
+    }
+
+    setGenerating(reportType);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-report', {
+        body: { projectId, reportType },
+      });
+
+      if (error || data?.error) {
+        toast({ title: 'Fehler', description: data?.error || error?.message, variant: 'destructive' });
+      } else if (data?.html) {
+        // Open report in new window for printing/PDF
+        const win = window.open('', '_blank');
+        if (win) {
+          win.document.write(`
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>${data.title} – ${project.name}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    body { font-family: 'IBM Plex Sans', sans-serif; max-width: 800px; margin: 0 auto; padding: 40px; color: #1a1a2e; }
+    h1, h2, h3 { color: #0f172a; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left; font-size: 13px; }
+    th { background: #f1f5f9; font-weight: 600; }
+    code, .mono { font-family: 'IBM Plex Mono', monospace; }
+    .auto { background: #fef3c7; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+    .confirmed { background: #d1fae5; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+    .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 16px 0; }
+    .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #e2e8f0; font-size: 11px; color: #64748b; }
+    @media print { body { padding: 20px; } }
+  </style>
+</head>
+<body>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:16px;border-bottom:3px solid #0f172a;">
+    <div>
+      <h1 style="margin:0;font-size:22px;">HolzStatik</h1>
+      <p style="margin:4px 0 0;color:#64748b;font-size:13px;">${data.title}</p>
+    </div>
+    <div style="text-align:right;font-size:12px;color:#64748b;">
+      <div>Projekt: ${project.name}</div>
+      <div>Erstellt: ${new Date(data.generatedAt).toLocaleString('de-AT')}</div>
+    </div>
+  </div>
+  ${data.html}
+  <div class="footer">
+    <p><strong>Wichtiger Hinweis:</strong> Diese Vorbemessung ersetzt keine rechtsverbindliche statische Berechnung durch eine qualifizierte Fachperson (Ziviltechniker, Statiker).</p>
+    <p>Generiert am ${new Date(data.generatedAt).toLocaleString('de-AT')} • HolzStatik v1.0.0-beta</p>
+  </div>
+</body>
+</html>`);
+          win.document.close();
+        }
+        toast({ title: `${data.title} erstellt`, description: 'Bericht wurde in neuem Tab geöffnet.' });
+      }
+    } catch (e) {
+      toast({ title: 'Fehler', description: 'Berichterstellung fehlgeschlagen', variant: 'destructive' });
+    }
+    setGenerating(null);
+  };
+
+  // Use DB audit entries if available, fallback to project mock data
+  const displayEntries = entries.length > 0 ? entries : project.auditEntries;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -22,8 +100,8 @@ export function ReportTab({ project }: ReportTabProps) {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {reports.map((r, i) => (
-          <div key={i} className="rounded-lg border bg-card p-5 space-y-3 hover:shadow-md transition-all">
+        {reports.map((r) => (
+          <div key={r.key} className="rounded-lg border bg-card p-5 space-y-3 hover:shadow-md transition-all">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10">
@@ -37,43 +115,59 @@ export function ReportTab({ project }: ReportTabProps) {
             </div>
             <div className="flex items-center justify-between pt-2 border-t">
               <span className="text-[10px] text-muted-foreground">Format: {r.format}</span>
-              <Button size="sm" variant="outline" className="gap-1.5">
-                <Download className="h-3.5 w-3.5" />
-                Exportieren
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => handleExport(r.key)}
+                disabled={generating === r.key}
+              >
+                {generating === r.key ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" />Generiere…</>
+                ) : (
+                  <><Download className="h-3.5 w-3.5" />Exportieren</>
+                )}
               </Button>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Audit Trail */}
+      {/* Audit Trail from DB */}
       <SectionCard title="Audit Trail" subtitle="Protokoll aller automatischen und manuellen Änderungen" headerRight={<History className="h-4 w-4 text-muted-foreground" />}>
-        <div className="space-y-0">
-          {project.auditEntries.map((entry, i) => (
-            <div key={entry.id} className="flex items-start gap-3 py-3 border-b last:border-b-0">
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted shrink-0 mt-0.5">
-                <span className="text-[10px] font-bold text-muted-foreground">{i + 1}</span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-xs font-medium">{entry.agent}</span>
-                  <span className="text-[10px] text-muted-foreground">•</span>
-                  <span className="text-[10px] text-muted-foreground font-mono">
-                    {new Date(entry.timestamp).toLocaleString('de-AT')}
-                  </span>
-                  {entry.userInitiated && (
-                    <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">Benutzer</span>
+        {auditLoading ? (
+          <div className="py-8 text-center text-muted-foreground text-sm">Audit-Protokoll laden…</div>
+        ) : (
+          <div className="space-y-0">
+            {displayEntries.map((entry, i) => (
+              <div key={entry.id} className="flex items-start gap-3 py-3 border-b last:border-b-0">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted shrink-0 mt-0.5">
+                  <span className="text-[10px] font-bold text-muted-foreground">{i + 1}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-xs font-medium">{entry.agent}</span>
+                    <span className="text-[10px] text-muted-foreground">•</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {new Date(entry.timestamp).toLocaleString('de-AT')}
+                    </span>
+                    {entry.userInitiated && (
+                      <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">Benutzer</span>
+                    )}
+                  </div>
+                  <p className="text-sm">{entry.action}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{entry.reason}</p>
+                  {entry.newValue && entry.newValue !== '-' && (
+                    <p className="text-xs font-mono text-accent mt-0.5">→ {entry.newValue}</p>
                   )}
                 </div>
-                <p className="text-sm">{entry.action}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{entry.reason}</p>
-                {entry.newValue && entry.newValue !== '-' && (
-                  <p className="text-xs font-mono text-accent mt-0.5">→ {entry.newValue}</p>
-                )}
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+            {displayEntries.length === 0 && (
+              <p className="text-sm text-muted-foreground py-4">Noch keine Audit-Einträge vorhanden.</p>
+            )}
+          </div>
+        )}
       </SectionCard>
     </div>
   );
