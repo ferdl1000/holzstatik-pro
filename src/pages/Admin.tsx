@@ -101,7 +101,7 @@ const Admin = () => {
   async function updateUserRole(userId: string, newRole: string) {
     // Remove existing roles, add new one
     await supabase.from('user_roles').delete().eq('user_id', userId);
-    const { error } = await supabase.from('user_roles').insert({ user_id: userId, role: newRole });
+    const { error } = await supabase.from('user_roles').insert([{ user_id: userId, role: newRole as any }]);
     if (error) {
       toast({ title: 'Fehler', description: error.message, variant: 'destructive' });
     } else {
