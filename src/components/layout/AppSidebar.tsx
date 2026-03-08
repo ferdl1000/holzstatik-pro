@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import {
   FileText, Scan, MapPin, Ruler, Building2, Weight, TreePine,
   Calculator, CheckCircle, FileOutput, LayoutDashboard, Plus,
-  ChevronRight, Shield
+  ChevronRight, Shield, Settings, LogOut, User
 } from 'lucide-react';
 import {
   Sidebar,
@@ -18,6 +18,7 @@ import {
   SidebarFooter,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { useAuth } from '@/contexts/AuthContext';
 
 const WORKFLOW_ICONS = {
   plan: FileText,
@@ -50,6 +51,8 @@ export function AppSidebar() {
   const collapsed = state === 'collapsed';
   const location = useLocation();
   const isProjectView = location.pathname.startsWith('/project/');
+  const { profile, isAdmin, signOut } = useAuth();
+  const projectId = isProjectView ? location.pathname.split('/project/')[1]?.split('?')[0] : null;
 
   return (
     <Sidebar collapsible="icon" className="border-r-0">
@@ -90,11 +93,24 @@ export function AppSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <Link to="/admin" className={cn(
+                      'flex items-center gap-2',
+                      location.pathname === '/admin' && 'bg-sidebar-accent text-sidebar-primary'
+                    )}>
+                      <Settings className="h-4 w-4" />
+                      {!collapsed && <span>Administration</span>}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {isProjectView && (
+        {isProjectView && projectId && (
           <SidebarGroup>
             <SidebarGroupLabel className="text-sidebar-foreground/50">Workflow-Schritte</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -106,7 +122,7 @@ export function AppSidebar() {
                     <SidebarMenuItem key={step.key}>
                       <SidebarMenuButton asChild>
                         <Link
-                          to={`/project/demo?tab=${step.key}`}
+                          to={`/project/${projectId}?tab=${step.key}`}
                           className={cn(
                             'flex items-center gap-2',
                             isActive && 'bg-sidebar-accent text-sidebar-primary'
@@ -138,7 +154,21 @@ export function AppSidebar() {
         )}
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-3">
+      <SidebarFooter className="border-t border-sidebar-border p-3 space-y-2">
+        {!collapsed && profile && (
+          <div className="flex items-center gap-2 rounded-md bg-sidebar-accent/30 p-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-sidebar-primary/20">
+              <User className="h-3.5 w-3.5 text-sidebar-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-sidebar-foreground truncate">{profile.display_name}</p>
+              <p className="text-[10px] text-sidebar-foreground/50 truncate">{profile.email}</p>
+            </div>
+            <button onClick={() => signOut()} className="text-sidebar-foreground/40 hover:text-sidebar-foreground">
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         {!collapsed && (
           <div className="flex items-start gap-2 rounded-md bg-sidebar-accent/30 p-2.5">
             <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-yellow" />

@@ -1,6 +1,6 @@
-import { useSearchParams, Link } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { MOCK_PROJECT } from '@/data/mockProject';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
@@ -17,6 +17,9 @@ import { MaterialsTab } from '@/components/project/MaterialsTab';
 import { CalculationTab } from '@/components/project/CalculationTab';
 import { ReviewTab } from '@/components/project/ReviewTab';
 import { ReportTab } from '@/components/project/ReportTab';
+import { supabase } from '@/integrations/supabase/client';
+import { MOCK_PROJECT } from '@/data/mockProject';
+import type { Project } from '@/types/project';
 
 const TAB_CONFIG = [
   { key: 'plan', label: 'Plan', icon: FileText },
@@ -33,13 +36,57 @@ const TAB_CONFIG = [
 
 const ProjectView = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { id } = useParams<{ id: string }>();
   const activeTab = searchParams.get('tab') || 'plan';
-  const project = MOCK_PROJECT;
+  const [project, setProject] = useState<Project>(MOCK_PROJECT);
+  const [dbProject, setDbProject] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!id) return;
+    loadProject();
+  }, [id]);
+
+  async function loadProject() {
+    setLoading(true);
+    const { data } = await supabase.from('projects').select('*').eq('id', id).single();
+    if (data) {
+      setDbProject(data);
+      const pd = data.project_data as any;
+      if (pd && pd.name) {
+        setProject({ ...MOCK_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
+      } else {
+        setProject({ ...MOCK_PROJECT, id: data.id, name: data.name, description: data.description || '' });
+      }
+    }
+    setLoading(false);
+  }
+
+  const updateProject = useCallback(async (updates: Partial<Project>) => {
+    const updated = { ...project, ...updates };
+    setProject(updated);
+    if (dbProject) {
+      await supabase.from('projects').update({
+        project_data: updated as any,
+        status: updated.status,
+        current_step: updated.currentStep,
+      }).eq('id', dbProject.id);
+    }
+  }, [project, dbProject]);
+
+  if (loading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-pulse-slow text-muted-foreground">Projekt laden…</div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
       <div className="flex flex-col h-[calc(100vh-2.75rem)]">
-        {/* Project header */}
         <div className="border-b bg-card px-6 py-3 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -54,7 +101,6 @@ const ProjectView = () => {
           </div>
         </div>
 
-        {/* Tabs */}
         <Tabs
           value={activeTab}
           onValueChange={(v) => setSearchParams({ tab: v })}
@@ -76,13 +122,13 @@ const ProjectView = () => {
           </div>
 
           <div className="flex-1 overflow-auto">
-            <TabsContent value="plan" className="m-0 h-full"><PlanTab project={project} /></TabsContent>
+            <TabsContent value="plan" className="m-0 h-full"><PlanTab project={project} projectId={dbProject?.id} /></TabsContent>
             <TabsContent value="extraction" className="m-0 h-full"><ExtractionTab project={project} /></TabsContent>
-            <TabsContent value="address" className="m-0 h-full"><AddressTab project={project} /></TabsContent>
-            <TabsContent value="geometry" className="m-0 h-full"><GeometryTab project={project} /></TabsContent>
-            <TabsContent value="structure" className="m-0 h-full"><StructureTab project={project} /></TabsContent>
-            <TabsContent value="loads" className="m-0 h-full"><LoadsTab project={project} /></TabsContent>
-            <TabsContent value="materials" className="m-0 h-full"><MaterialsTab project={project} /></TabsContent>
+            <TabsContent value="address" className="m-0 h-full"><AddressTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="geometry" className="m-0 h-full"><GeometryTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="structure" className="m-0 h-full"><StructureTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="loads" className="m-0 h-full"><LoadsTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="materials" className="m-0 h-full"><MaterialsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="calculation" className="m-0 h-full"><CalculationTab project={project} /></TabsContent>
             <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} /></TabsContent>
             <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} /></TabsContent>
