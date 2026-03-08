@@ -4,9 +4,9 @@ import { SectionCard } from '@/components/shared/SectionCard';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Calculator, Play, AlertTriangle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Calculator, Play, AlertTriangle, CheckCircle, XCircle, Loader2, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { calculateAllMembers } from '@/lib/calculations';
+import { calculateAllMembers, checkCalculationPrerequisites } from '@/lib/calculations';
 import { useToast } from '@/hooks/use-toast';
 
 interface CalculationTabProps {
@@ -18,53 +18,42 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
   const [calculating, setCalculating] = useState(false);
   const { toast } = useToast();
 
-  const handleCalculate = () => {
-    // Check prerequisites
-    const missingPrereqs: string[] = [];
-    if (!project.geometry?.userConfirmed) missingPrereqs.push('Geometrie nicht bestätigt');
-    if (!project.structuralSystem?.userConfirmed) missingPrereqs.push('Tragwerk nicht bestätigt');
-    if (project.loadCases.length === 0) missingPrereqs.push('Keine Lastfälle definiert');
-    if (project.members.length === 0) missingPrereqs.push('Keine Bauteile definiert');
+  const roofPitch = project.geometry?.roofPitch?.value;
+  const mainSpan = project.geometry?.width?.value;
+  const prereqBlockers = checkCalculationPrerequisites(
+    project.members, project.materials, project.loadCases,
+    roofPitch, mainSpan
+  );
 
-    if (missingPrereqs.length > 0) {
+  const handleCalculate = () => {
+    if (prereqBlockers.length > 0) {
       toast({
-        title: 'Berechnung nicht möglich',
-        description: missingPrereqs.join(', '),
+        title: 'Berechnung blockiert',
+        description: prereqBlockers.map(b => b.message).join('; '),
         variant: 'destructive',
       });
       return;
     }
 
     setCalculating(true);
-
-    // Run calculation (synchronous but with visual delay)
     setTimeout(() => {
-      const roofPitch = project.geometry?.roofPitch?.value || 35;
-      const mainSpan = project.geometry?.width?.value || 8;
-
       const results = calculateAllMembers(
-        project.members,
-        project.materials,
-        project.loadCases,
-        roofPitch,
-        mainSpan
+        project.members, project.materials, project.loadCases,
+        roofPitch!, mainSpan!
       );
 
-      // Update validation issues based on results
       const newIssues = results
         .filter(r => r.overallStatus === 'red')
         .flatMap(r =>
-          r.checks
-            .filter(c => c.status === 'red')
-            .map(c => ({
-              id: `vi-calc-${r.memberId}-${c.name}`,
-              severity: 'red' as const,
-              category: 'Bemessung',
-              message: `${r.memberName}: ${c.name} überschritten (${c.formula})`,
-              affectedField: `members.${r.memberId}`,
-              suggestion: c.type === 'stress' ? 'Querschnitt vergrößern oder Material ändern' : 'Spannweite oder Auflager prüfen',
-              resolved: false,
-            }))
+          r.checks.filter(c => c.status === 'red').map(c => ({
+            id: `vi-calc-${r.memberId}-${c.name}`,
+            severity: 'red' as const,
+            category: 'Bemessung',
+            message: `${r.memberName}: ${c.name} überschritten (${c.formula})`,
+            affectedField: `members.${r.memberId}`,
+            suggestion: c.type === 'stress' ? 'Querschnitt vergrößern oder Material ändern' : 'Spannweite oder Auflager prüfen',
+            resolved: false,
+          }))
         );
 
       if (onUpdate) {
@@ -80,10 +69,9 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
 
       setCalculating(false);
       const passed = results.filter(r => r.overallStatus === 'green').length;
-      const total = results.length;
       toast({
         title: 'Berechnung abgeschlossen',
-        description: `${passed}/${total} Bauteile bestanden. ${newIssues.length} neue Probleme.`,
+        description: `${passed}/${results.length} Bauteile bestanden. ${newIssues.length} neue Probleme.`,
       });
     }, 1500);
   };
@@ -94,10 +82,10 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
         <div>
           <h2 className="text-lg font-bold">Bemessungs-Agent</h2>
           <p className="text-sm text-muted-foreground">
-            Vorbemessung und Nachweisführung Holz-Dachtragwerk nach EC5 / ÖNORM B 1995-1-1
+            Vorbemessung nach EC5 / ÖNORM B 1995-1-1
           </p>
         </div>
-        <Button className="gap-1.5" onClick={handleCalculate} disabled={calculating}>
+        <Button className="gap-1.5" onClick={handleCalculate} disabled={calculating || prereqBlockers.length > 0}>
           {calculating ? (
             <><Loader2 className="h-4 w-4 animate-spin" />Berechne…</>
           ) : (
@@ -106,7 +94,19 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
         </Button>
       </div>
 
-      {/* Calculation parameters info */}
+      {/* Prerequisite blockers */}
+      {prereqBlockers.length > 0 && (
+        <div className="rounded-lg border-2 border-[hsl(var(--status-red)/0.5)] bg-[hsl(var(--status-red-bg))] p-4">
+          <p className="text-sm font-semibold text-[hsl(var(--status-red))] flex items-center gap-2 mb-2">
+            <ShieldAlert className="h-4 w-4" />Berechnung blockiert – Voraussetzungen fehlen
+          </p>
+          <ul className="text-xs text-foreground/80 space-y-1">
+            {prereqBlockers.map((b, i) => <li key={i}>• {b.message}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {/* Eurocode parameters (normative, not project data) */}
       <div className="grid grid-cols-4 gap-3">
         {[
           { label: 'γ_M (Holz)', value: '1.30' },
@@ -126,7 +126,7 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
           <Calculator className="h-12 w-12 text-muted-foreground/30 mx-auto" />
           <p className="text-muted-foreground">Noch keine Berechnung durchgeführt</p>
           <p className="text-xs text-muted-foreground">
-            Bestätigen Sie zuerst Geometrie, Tragwerk, Lasten und Materialien.
+            Bestätigen Sie Geometrie, Tragwerk, Lasten und Bauteile zuerst.
           </p>
         </div>
       ) : null}
@@ -144,40 +144,32 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
                 return (
                   <div key={i} className="flex items-center gap-4 rounded-md border p-3">
                     <div className="flex items-center gap-2 w-48">
-                      {check.status === 'green' && <CheckCircle className="h-4 w-4 text-status-green" />}
-                      {check.status === 'yellow' && <AlertTriangle className="h-4 w-4 text-status-yellow" />}
-                      {check.status === 'red' && <XCircle className="h-4 w-4 text-status-red" />}
+                      {check.status === 'green' && <CheckCircle className="h-4 w-4 text-[hsl(var(--status-green))]" />}
+                      {check.status === 'yellow' && <AlertTriangle className="h-4 w-4 text-[hsl(var(--status-yellow))]" />}
+                      {check.status === 'red' && <XCircle className="h-4 w-4 text-[hsl(var(--status-red))]" />}
                       <span className="text-sm font-medium">{check.name}</span>
                     </div>
-
                     {utilization !== null ? (
                       <div className="flex-1 flex items-center gap-3">
                         <div className="flex-1">
                           <Progress
                             value={Math.min(utilization, 100)}
-                            className={cn(
-                              'h-2',
-                              utilization > 100 && '[&>div]:bg-status-red',
-                              utilization > 80 && utilization <= 100 && '[&>div]:bg-status-yellow',
-                              utilization <= 80 && '[&>div]:bg-status-green'
+                            className={cn('h-2',
+                              utilization > 100 && '[&>div]:bg-[hsl(var(--status-red))]',
+                              utilization > 80 && utilization <= 100 && '[&>div]:bg-[hsl(var(--status-yellow))]',
+                              utilization <= 80 && '[&>div]:bg-[hsl(var(--status-green))]'
                             )}
                           />
                         </div>
-                        <span className={cn(
-                          'font-mono text-sm font-semibold w-14 text-right',
-                          utilization > 100 && 'text-status-red',
-                          utilization > 80 && utilization <= 100 && 'text-status-yellow',
-                          utilization <= 80 && 'text-status-green'
-                        )}>
-                          {utilization}%
-                        </span>
+                        <span className={cn('font-mono text-sm font-semibold w-14 text-right',
+                          utilization > 100 && 'text-[hsl(var(--status-red))]',
+                          utilization > 80 && utilization <= 100 && 'text-[hsl(var(--status-yellow))]',
+                          utilization <= 80 && 'text-[hsl(var(--status-green))]'
+                        )}>{utilization}%</span>
                       </div>
                     ) : (
-                      <div className="flex-1">
-                        <span className="value-display">{check.result} {check.unit}</span>
-                      </div>
+                      <div className="flex-1"><span className="value-display">{check.result} {check.unit}</span></div>
                     )}
-
                     <div className="text-xs text-muted-foreground w-56 text-right">
                       {check.formula && <span className="font-mono">{check.formula}</span>}
                     </div>
@@ -186,27 +178,21 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
               })}
             </div>
 
-            {/* Details */}
             {calc.checks.some(c => c.details) && (
               <div className="rounded-md bg-muted/20 p-3 space-y-1">
                 {calc.checks.filter(c => c.details).map((check, i) => (
-                  <p key={i} className="text-xs font-mono text-muted-foreground">
-                    {check.name}: {check.details}
-                  </p>
+                  <p key={i} className="text-xs font-mono text-muted-foreground">{check.name}: {check.details}</p>
                 ))}
               </div>
             )}
 
             {calc.missingInputs.length > 0 && (
-              <div className="rounded-md bg-status-yellow-bg border border-status-yellow/20 p-3">
-                <p className="text-xs font-medium text-status-yellow mb-1.5 flex items-center gap-1.5">
-                  <AlertTriangle className="h-3 w-3" />
-                  Offene Punkte
+              <div className="rounded-md bg-[hsl(var(--status-yellow-bg))] border border-[hsl(var(--status-yellow)/0.2)] p-3">
+                <p className="text-xs font-medium text-[hsl(var(--status-yellow))] mb-1.5 flex items-center gap-1.5">
+                  <AlertTriangle className="h-3 w-3" />Offene Punkte
                 </p>
                 <ul className="text-xs text-foreground/70 space-y-0.5">
-                  {calc.missingInputs.map((mi, i) => (
-                    <li key={i}>• {mi}</li>
-                  ))}
+                  {calc.missingInputs.map((mi, i) => <li key={i}>• {mi}</li>)}
                 </ul>
               </div>
             )}
