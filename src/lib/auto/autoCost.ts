@@ -19,6 +19,8 @@ interface AutoCostOptions {
   coveringId?: string;
   insulationId?: string;
   roofParts?: RoofPart[];
+  /** Zimmerei-Modus (default): nur Holz + Verbinder + Lohn. Keine Eindeckung/Dämmung/Folien. */
+  zimmereiOnly?: boolean;
 }
 
 export interface RoofPartCostEntry {
@@ -131,18 +133,15 @@ function computeForMembers(
   coveringId: string,
   insulationId: string,
   orderListNotesSuffix?: string,
+  zimmereiOnly: boolean = true,
 ): { materialOnly: CostEstimate; withLabor: CostEstimate; orderList: OrderListItem[] } {
   const hasGlulam = members.some(m => (m.material || '').toLowerCase().includes('gl'));
 
-  const commonInput = {
-    members,
-    roofArea,
-    groundArea,
-    coveringId,
-    insulationId,
-    membraneIds: ['mem_under', 'mem_vapor'] as string[],
-    hasGlulam,
-  };
+  // Zimmerei-Modus: keine Eindeckung/Dämmung/Folien
+  const commonInput = zimmereiOnly
+    ? { members, roofArea, groundArea, coveringId: undefined, insulationId: undefined, membraneIds: [] as string[], hasGlulam }
+    : { members, roofArea, groundArea, coveringId, insulationId,
+        membraneIds: ['mem_under', 'mem_vapor'] as string[], hasGlulam };
 
   const withLabor = estimateCost({ ...commonInput, factors: DEFAULT_FACTORS });
 
@@ -226,6 +225,7 @@ export function autoComputeCosts(
   const coveringId = opts?.coveringId ?? 'tile_clay';
   const insulationId = opts?.insulationId ?? 'ins_mw_200';
   const roofParts = opts?.roofParts;
+  const zimmereiOnly = opts?.zimmereiOnly ?? true;  // Default: Zimmerei-Modus
 
   // ── Fall 1: roofParts vorhanden → pro Dachteil berechnen ──
   if (roofParts && roofParts.length > 0) {
@@ -245,6 +245,7 @@ export function autoComputeCosts(
         coveringId,
         insulationId,
         `Aus Dachteil: ${part.label}`,
+        zimmereiOnly,
       );
 
       return { roofPartId: part.id, label: part.label, materialOnly, withLabor, orderList };
@@ -267,6 +268,8 @@ export function autoComputeCosts(
     groundArea,
     coveringId,
     insulationId,
+    undefined,
+    zimmereiOnly,
   );
 
   return { materialOnly, withLabor, orderList };
