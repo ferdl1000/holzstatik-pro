@@ -1,3 +1,5 @@
+import type { RoofPart } from './roofParts';
+
 // ===== Status & Confidence Types =====
 export type StatusLevel = 'green' | 'yellow' | 'red';
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
@@ -33,6 +35,8 @@ export interface Project {
   calculations: CalculationResult[];
   validationIssues: ValidationIssue[];
   auditEntries: AuditEntry[];
+  /** Multi-Dachteil-Erweiterung: erkannte Dachteile mit je eigener Geometrie + Bauteilen */
+  roofParts?: RoofPart[];
 }
 
 // ===== Documents =====

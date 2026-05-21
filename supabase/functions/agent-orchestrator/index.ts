@@ -66,7 +66,7 @@ serve(async (req) => {
     } else {
       extracted = docResult.data.extracted as Record<string, any>;
     }
-    log.push(`✓ Dokument: ${extracted.texts?.length || 0} Texte, ${extracted.dimensions?.length || 0} Maße, ${extracted.addresses?.length || 0} Adressen, Konfidenz ${((extracted.overallConfidence as number || 0) * 100).toFixed(0)}%`);
+    log.push(`✓ Dokument: ${extracted.texts?.length || 0} Texte, ${extracted.dimensions?.length || 0} Maße, ${extracted.addresses?.length || 0} Adressen, ${(extracted.roofParts as unknown[])?.length || 0} Dachteile, Konfidenz ${((extracted.overallConfidence as number || 0) * 100).toFixed(0)}%`);
 
     // === 2. Adress + Struktur parallel (GRACEFUL) ===
     log.push('▶ Adress- und Struktur-Agent parallel…');
@@ -143,6 +143,33 @@ serve(async (req) => {
         alternatives: structResult.data.alternatives || [],
         userConfirmed: false,
       };
+    }
+
+    // roofParts: multi-roof-part support
+    const extractedRoofParts = (extracted.roofParts as Array<any> | undefined);
+    if (extractedRoofParts && extractedRoofParts.length > 0) {
+      projectUpdate.roofParts = extractedRoofParts.map((rp: any) => ({
+        id: rp.id,
+        kind: rp.kind,
+        label: rp.label,
+        form: rp.form,
+        positionX: rp.positionX ?? 0,
+        positionY: rp.positionY ?? 0,
+        geometry: {
+          length: rp.length ?? 0,
+          width: rp.width ?? 0,
+          ridgeHeight: rp.ridgeHeight ?? 0,
+          eavesHeight: rp.eavesHeight ?? 0,
+          pitch: rp.pitch ?? 0,
+          ridgeDirection: rp.ridgeDirection ?? 'x',
+        },
+        members: [],
+        confidence: rp.confidence ?? 0.5,
+        ...(rp.notes ? { notes: rp.notes } : {}),
+      }));
+      log.push(`✓ RoofParts: ${projectUpdate.roofParts.length} Dachteil(e) erkannt (${projectUpdate.roofParts.map((r: any) => r.label).join(', ')})`);
+    } else {
+      log.push('ℹ RoofParts: Nur Hauptdach (kein multi-part-Ergebnis aus Extraktion)');
     }
 
     await supabase.from('projects')

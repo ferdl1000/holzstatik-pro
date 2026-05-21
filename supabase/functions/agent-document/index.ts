@@ -27,6 +27,23 @@ Antworte AUSSCHLIESSLICH mit validem JSON in dieser Struktur:
   "roofHints": { "form": "satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform", "pitch": 35, "confidence": 0..1, "ridgeDirection": "Nord-Süd|Ost-West|unbekannt" },
   "structureHints": { "type": "sparrendach|kehlbalkendach|pfettendach|leimbinder_haupttraeger|sonderfall", "reasoning": "...", "confidence": 0..1, "visibleMembers": ["sparren","mittelpfette","stuetze","leimbinder"] },
   "spans": [{ "label": "L1", "length": 6.5, "confidence": 0..1 }],
+  "roofParts": [
+    {
+      "id": "main",
+      "kind": "main",
+      "label": "Hauptdach",
+      "form": "satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform",
+      "positionX": 0,
+      "positionY": 0,
+      "length": 21.8,
+      "width": 8.0,
+      "ridgeHeight": 6.26,
+      "eavesHeight": 4.65,
+      "pitch": 22,
+      "ridgeDirection": "x",
+      "confidence": 0.9
+    }
+  ],
   "overallConfidence": 0..1,
   "unreliableAreas": ["..."],
   "assumptions": ["..."]
@@ -37,7 +54,18 @@ WICHTIG:
 - Maße: Nur einbeziehen, wenn klare Beschriftung erkennbar.
 - Strukturhinweise: Nur wenn aus Plan ersichtlich (Schnitt, Detailbild). Sonst confidence niedrig.
 - Konfidenz: 0.9+ nur bei klar lesbarem Text. Bei Unschärfe/Vermutung 0.4-0.6.
-- Niemals Werte erfinden. Lieber confidence niedrig setzen oder weglassen.`;
+- Niemals Werte erfinden. Lieber confidence niedrig setzen oder weglassen.
+
+ROOFPARTS-REGELN:
+- IMMER mindestens 1 Eintrag (kind="main") für das Hauptdach.
+- Wenn im Plan klar mehrere Bauteile/Anbauten erkennbar sind (z.B. unterschiedliche Dachhöhen, abgeknickte Grundrisse, separate Garage, Vordach beim Eingang) → mehrere Einträge anlegen.
+- kind-Werte: "main" (Hauptdach), "anbau" (Zubau/Anbau mit eigener Dachfläche), "vordach" (kleines Schutzdach über Eingang), "gaube" (Dachgaube/Dachfenster-Aufbau im Hauptdach), "carport" (Carport/Garage), "andere".
+- positionX/Y: Position des Dachteils in Metern relativ zum Mittelpunkt des Hauptdach-Grundrisses. Hauptdach hat immer 0/0.
+- ridgeDirection: "x" (First verläuft in Gebäude-Längsrichtung) oder "y" (First quer).
+- Konfidenz: 0.9+ wenn klar im Plan ablesbar; 0.5–0.7 wenn vermutet/nicht ganz eindeutig; unter 0.5 wenn unklar.
+- Maximal 5 Dachteile (mehr ist meist Über-Interpretation).
+- Wenn nur ein Dach erkennbar: nur main eintragen.
+- Optional: "notes" Feld für Hinweise zur Erkennung (z.B. "Erkannt aus Grundriss Ostseite, niedriger als Hauptbau").`;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
@@ -75,7 +103,7 @@ serve(async (req) => {
       fileBase64: base64,
       mimeType: 'application/pdf',
       jsonMode: true,
-      maxTokens: 32768,
+      maxTokens: 65536,
     });
 
     const extracted = parseJsonResponse<Record<string, unknown>>(text);

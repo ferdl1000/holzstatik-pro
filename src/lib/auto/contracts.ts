@@ -16,6 +16,7 @@
  */
 
 import type { Project, BuildingGeometry, RoofType, StructuralSystem, TimberMember, LoadCase } from '@/types/project';
+import type { RoofPart } from '@/types/roofParts';
 import type { CostEstimate } from '@/lib/pricing';
 
 export interface AutoAssumption {
@@ -97,6 +98,8 @@ export interface AutoPipelineResult {
   confidenceScore: number;
   /** Human-readable Zusammenfassung */
   summary: string;
+  /** Aktualisierte Dachteile mit generierten Members (nur wenn multi-part) */
+  roofParts?: RoofPart[];
 }
 
 export interface AutoPipelineInput {

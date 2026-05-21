@@ -80,6 +80,7 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
           structuralSystem: pipelineResult.structuralSystem.structuralSystem,
           members: pipelineResult.calculations.optimizedMembers,
           loadCases: pipelineResult.loads.loadCases,
+          ...(pipelineResult.roofParts ? { roofParts: pipelineResult.roofParts } : {}),
         });
       }
 
