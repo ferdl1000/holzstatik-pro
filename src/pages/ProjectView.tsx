@@ -5,7 +5,8 @@ import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   FileText, Scan, MapPin, Ruler, Building2, Weight,
-  TreePine, Calculator, CheckCircle, FileOutput, ShieldAlert
+  TreePine, Calculator, CheckCircle, FileOutput, ShieldAlert,
+  Boxes, Euro, Sparkles, ShoppingCart,
 } from 'lucide-react';
 import { PlanTab } from '@/components/project/PlanTab';
 import { ExtractionTab } from '@/components/project/ExtractionTab';
@@ -17,6 +18,10 @@ import { MaterialsTab } from '@/components/project/MaterialsTab';
 import { CalculationTab } from '@/components/project/CalculationTab';
 import { ReviewTab } from '@/components/project/ReviewTab';
 import { ReportTab } from '@/components/project/ReportTab';
+import { Visual3DTab } from '@/components/project/Visual3DTab';
+import { CostsTab } from '@/components/project/CostsTab';
+import { AutoAnalysisTab } from '@/components/project/AutoAnalysisTab';
+import { BillOfMaterialsTab } from '@/components/project/BillOfMaterialsTab';
 import { supabase } from '@/integrations/supabase/client';
 import { EMPTY_PROJECT } from '@/data/mockProject';
 import type { Project } from '@/types/project';
@@ -24,6 +29,8 @@ import { runFullValidation, countBySeverity } from '@/lib/validation';
 
 const TAB_CONFIG = [
   { key: 'plan', label: 'Plan', icon: FileText },
+  { key: 'autoanalysis', label: 'Komplett-Analyse', icon: Sparkles },
+  { key: 'bom', label: 'Bestellliste', icon: ShoppingCart },
   { key: 'extraction', label: 'Extraktion', icon: Scan },
   { key: 'address', label: 'Adresse', icon: MapPin },
   { key: 'geometry', label: 'Geometrie', icon: Ruler },
@@ -31,6 +38,8 @@ const TAB_CONFIG = [
   { key: 'loads', label: 'Lasten', icon: Weight },
   { key: 'materials', label: 'Materialien', icon: TreePine },
   { key: 'calculation', label: 'Berechnung', icon: Calculator },
+  { key: 'visual3d', label: '3D-Modell', icon: Boxes },
+  { key: 'costs', label: 'Kosten', icon: Euro },
   { key: 'review', label: 'Prüfung', icon: CheckCircle },
   { key: 'report', label: 'Bericht', icon: FileOutput },
 ];
@@ -53,10 +62,11 @@ const ProjectView = () => {
     const { data } = await supabase.from('projects').select('*').eq('id', id).single();
     if (data) {
       setDbProject(data);
-      const pd = data.project_data as any;
-      if (pd && pd.name) {
-        setProject({ ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
-      } else {
+      const pd = (data.project_data as any) || {};
+      // Spread project_data immer (auch ohne `name`), damit Agent-Updates (address, geometry, …) sichtbar werden
+      setProject({ ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
+      // Fallback-Zweig nur falls Spread fehlschlägt
+      if (false) {
         setProject({ ...EMPTY_PROJECT, id: data.id, name: data.name, description: data.description || '' });
       }
     }
@@ -139,6 +149,8 @@ const ProjectView = () => {
             <TabsContent value="plan" className="m-0 h-full">
               <PlanTab project={project} projectId={dbProject?.id} onAnalysisComplete={loadProject} />
             </TabsContent>
+            <TabsContent value="autoanalysis" className="m-0 h-full p-4"><AutoAnalysisTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="bom" className="m-0 h-full p-4"><BillOfMaterialsTab project={project} /></TabsContent>
             <TabsContent value="extraction" className="m-0 h-full"><ExtractionTab project={project} projectId={dbProject?.id} /></TabsContent>
             <TabsContent value="address" className="m-0 h-full"><AddressTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="geometry" className="m-0 h-full"><GeometryTab project={project} onUpdate={updateProject} /></TabsContent>
@@ -146,6 +158,8 @@ const ProjectView = () => {
             <TabsContent value="loads" className="m-0 h-full"><LoadsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="materials" className="m-0 h-full"><MaterialsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="calculation" className="m-0 h-full"><CalculationTab project={project} onUpdate={updateProject} /></TabsContent>
+            <TabsContent value="visual3d" className="m-0 h-full p-4"><Visual3DTab project={project} /></TabsContent>
+            <TabsContent value="costs" className="m-0 h-full p-4"><CostsTab project={project} /></TabsContent>
             <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} projectId={dbProject?.id} /></TabsContent>
           </div>

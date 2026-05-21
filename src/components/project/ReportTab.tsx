@@ -2,7 +2,11 @@ import { useState } from 'react';
 import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { Button } from '@/components/ui/button';
-import { FileText, Download, ClipboardList, TreePine, Shield, History, Loader2 } from 'lucide-react';
+import { FileText, Download, ClipboardList, TreePine, Shield, History, Loader2, FileCheck2 } from 'lucide-react';
+import { downloadReport } from '@/lib/report/generator';
+import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { useAuditTrail } from '@/hooks/useAuditTrail';
 import { supabase } from '@/integrations/supabase/client';
@@ -13,7 +17,46 @@ interface ReportTabProps { project: Project; projectId?: string; }
 export function ReportTab({ project, projectId }: ReportTabProps) {
   const { entries, loading: auditLoading } = useAuditTrail(projectId);
   const [generating, setGenerating] = useState<string | null>(null);
+  const [laymanMode, setLaymanMode] = useState(false);
+  const [includeCosts, setIncludeCosts] = useState(true);
+  const [includeAudit, setIncludeAudit] = useState(true);
   const { toast } = useToast();
+
+  const handleLocalPdf = () => {
+    try {
+      // Build calc results from project.calculations
+      const calcResults = (project.calculations || []).map(c => ({
+        input: { type: 'sparren' as const, span: 0, b: 0, h: 0, timberClass: 'C24', qPermanent: 0, qVariable: 0, variableDuration: 'shortTerm' as const, serviceClass: '1' as const },
+        section: { b: 0, h: 0, A: 0, Iy: 0, Iz: 0, Wy: 0, Wz: 0, iy: 0, iz: 0 },
+        material: {} as never,
+        internalForces: { M_Ed: 0, V_Ed: 0, M_char: 0, w_inst: 0, w_fin: 0 },
+        checks: c.checks.map(check => ({
+          name: check.name, description: '', formula: check.formula || '',
+          value: check.result, limit: check.limit, utilization: check.result / Math.max(check.limit, 0.001),
+          status: check.status, explanation: check.details || '',
+          values: {},
+        })),
+        overallStatus: c.overallStatus, maxUtilization: Math.max(...c.checks.map(ch => ch.result / Math.max(ch.limit, 0.001))),
+        summary: `${c.memberName}: ${c.checks.length} Nachweise`,
+      }));
+
+      const costs = includeCosts ? estimateCost({
+        members: project.members || [],
+        roofArea: project.geometry ? project.geometry.length.value * (project.geometry.width.value / Math.cos((project.geometry.roofPitch.value * Math.PI) / 180)) : 0,
+        groundArea: project.geometry ? project.geometry.length.value * project.geometry.width.value : 0,
+        coveringId: 'tile_clay', insulationId: 'ins_mw_200',
+        membraneIds: ['mem_under', 'mem_vapor'],
+        factors: DEFAULT_FACTORS,
+      }) : undefined;
+
+      downloadReport(project, calcResults as never, costs, {
+        laymanMode, includeFormulas: !laymanMode, includeAuditTrail: includeAudit, includeCosts,
+      });
+      toast({ title: 'PDF erstellt', description: 'Bericht wurde heruntergeladen.' });
+    } catch (e) {
+      toast({ title: 'PDF-Fehler', description: e instanceof Error ? e.message : 'Unbekannt', variant: 'destructive' });
+    }
+  };
 
   const reports = [
     { key: 'statik', icon: FileText, title: 'Statik-Auszug', desc: 'Bemessungsergebnisse, Schnittgrößen und Nachweise', format: 'PDF' },
@@ -98,6 +141,30 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
         <h2 className="text-lg font-bold">Bericht-Agent</h2>
         <p className="text-sm text-muted-foreground">Export und Dokumentation</p>
       </div>
+
+      {/* NEU: Komplett-PDF mit Berechnungen + Kosten */}
+      <SectionCard title="Komplett-Vorbemessung als PDF" subtitle="Prüffähiger Bericht mit allen Nachweisen, Formeln, Massenauszug und Kosten">
+        <div className="grid md:grid-cols-[1fr_auto] gap-4 items-end">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Switch id="laymanMode" checked={laymanMode} onCheckedChange={setLaymanMode} />
+              <Label htmlFor="laymanMode" className="text-sm">Laien-Modus (einfache Sprache, weniger Formeln)</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch id="incCosts" checked={includeCosts} onCheckedChange={setIncludeCosts} />
+              <Label htmlFor="incCosts" className="text-sm">Kostenschätzung einschließen</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch id="incAudit" checked={includeAudit} onCheckedChange={setIncludeAudit} />
+              <Label htmlFor="incAudit" className="text-sm">Audit-Trail anhängen</Label>
+            </div>
+          </div>
+          <Button onClick={handleLocalPdf} size="lg" className="gap-2">
+            <FileCheck2 className="h-4 w-4" />
+            PDF-Bericht erstellen
+          </Button>
+        </div>
+      </SectionCard>
 
       <div className="grid grid-cols-2 gap-4">
         {reports.map((r) => (

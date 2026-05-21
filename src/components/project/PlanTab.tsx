@@ -87,19 +87,32 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
     }, 1500);
 
     try {
-      const { data, error } = await supabase.functions.invoke('analyze-plan', {
+      const { data, error } = await supabase.functions.invoke('agent-orchestrator', {
         body: { documentId: docId, projectId },
       });
 
       clearInterval(progressInterval);
 
-      if (error) {
-        toast({ title: 'Analyse fehlgeschlagen', description: error.message, variant: 'destructive' });
-      } else if (data?.error) {
-        toast({ title: 'Analysefehler', description: data.error, variant: 'destructive' });
+      const msg = error?.message || data?.error || '';
+      const isQuota = msg.includes('429') || msg.toLowerCase().includes('quota');
+      if (error || data?.error) {
+        toast({
+          title: isQuota ? 'KI-Tageslimit erreicht' : 'Analyse fehlgeschlagen',
+          description: isQuota
+            ? 'Gemini Free-Tier vorübergehend ausgeschöpft. Du kannst jetzt manuell weiter: gehe zum Reiter "Adresse", "Geometrie" usw. und gib die Werte direkt ein.'
+            : msg,
+          variant: 'destructive',
+        });
+        // Bei Quota-Fehler trotzdem als "abgeschlossen" werten, damit User weiter kann
+        if (isQuota) onAnalysisComplete?.();
       } else {
         setAnalyzeProgress(100);
-        toast({ title: 'Analyse abgeschlossen', description: 'Extrahierte Daten sind verfügbar.' });
+        const errs = (data?.errors as string[] | undefined) || [];
+        if (errs.length > 0) {
+          toast({ title: 'Analyse teilweise erfolgreich', description: `${errs.length} Agent-Warnung(en). Daten sind verfügbar, bitte prüfen.` });
+        } else {
+          toast({ title: 'Analyse abgeschlossen', description: 'Extrahierte Daten sind verfügbar.' });
+        }
         onAnalysisComplete?.();
       }
     } catch (e) {

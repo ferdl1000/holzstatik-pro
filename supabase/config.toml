@@ -1,7 +1,19 @@
-project_id = "eachnkhpytsdtmphvwqb"
+project_id = "tcwrbkmjhxaemiapedfw"
 
 [functions.analyze-plan]
 verify_jwt = false
 
 [functions.generate-report]
+verify_jwt = false
+
+[functions.agent-document]
+verify_jwt = false
+
+[functions.agent-address]
+verify_jwt = false
+
+[functions.agent-structure]
+verify_jwt = false
+
+[functions.agent-orchestrator]
 verify_jwt = false

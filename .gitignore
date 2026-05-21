@@ -22,3 +22,16 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.env
+
+.vercel
+
+# Personal test PDFs - nicht ins Repo
+*.pdf
+!public/**/*.pdf
+
+# Temp Vercel env dumps
+.vercel-check.env
+
+# Vercel build output
+.vercel/
