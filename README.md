@@ -62,15 +62,43 @@ Lade einen PDF-Einreichplan hoch — die App liest mit KI Bauadresse, Geometrie 
 
 ---
 
-## Lokales Setup
+## Lokales Setup (auch von anderem PC mit Claude Code)
 
 ```bash
-git clone <repo>
-cd dachplan-assistent
+# 1. Klonen
+git clone https://github.com/ferdl1000/holzstatik-pro.git
+cd holzstatik-pro
+
+# 2. Dependencies
 npm install --legacy-peer-deps
-cp .env.example .env  # Werte eintragen
-npm run dev           # http://localhost:5173
+
+# 3. .env anlegen
+cp .env.example .env
+
+# 4. .env mit deinen Werten füllen (siehe unten)
+
+# 5. Dev-Server starten
+npm run dev   # http://localhost:5173
+
+# 6. Tests
+npm test      # 33 Tests
+
+# 7. Live-Deployment (Vercel + Supabase) – siehe DEPLOYMENT.md
 ```
+
+### Mit Claude Code auf einem anderen PC weiterarbeiten
+
+1. `git clone https://github.com/ferdl1000/holzstatik-pro.git`
+2. In Claude Code öffnen — der ganze Code, alle Tests und Edge Functions sind da
+3. Folgendes brauchst du selbst (nicht im Repo aus Sicherheitsgründen):
+   - **Gemini API Key** ➜ https://aistudio.google.com/apikey (kostenlos)
+   - **Supabase Project** ➜ https://supabase.com (Free Tier reicht) → Project Ref + Anon Key + Access Token
+   - **Vercel Account** ➜ https://vercel.com → Token aus Account → Tokens
+4. Werte in `.env` eintragen
+5. Deployen mit `vercel --prod` und `supabase functions deploy ...`
+   (siehe [DEPLOYMENT.md](./DEPLOYMENT.md))
+
+Das aktuell deployte Beispiel läuft unter https://dachplan-assistent.vercel.app
 
 `.env`-Variablen (siehe `.env.example`):
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY` — vom Supabase-Projekt
