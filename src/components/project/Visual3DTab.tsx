@@ -1,4 +1,5 @@
 import { Roof3D } from './Roof3D';
+import { AbbundOverview } from './AbbundDetails';
 import type { Project } from '@/types/project';
 import { legacyToRoofPart } from '@/types/roofParts';
 import type { RoofPart } from '@/types/roofParts';
@@ -55,9 +56,12 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
   }
 
   return (
-    <Roof3D
-      roofParts={roofParts}
-      utilizations={utilizations}
-    />
+    <div className="space-y-4">
+      <Roof3D
+        roofParts={roofParts}
+        utilizations={utilizations}
+      />
+      <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} />
+    </div>
   );
 }

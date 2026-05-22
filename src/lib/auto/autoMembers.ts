@@ -77,6 +77,120 @@ export function autoGenerateMembers(
 
   const sysType = structuralSystem.type;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HALLEN-MODUS (BSH-Binder, Großspannweiten >14 m oder Hallen-Tragwerk)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isHalleMode = sysType === 'leimbinder_haupttraeger' || buildingWidth > 14;
+
+  if (isHalleMode) {
+    // Hauptträger-Abstand: 5.5 m typisch
+    const traegerAbstand = 5.5;
+    const traegerCount = Math.max(2, Math.ceil(buildingLength / traegerAbstand) + 1);
+    const spannweite = buildingWidth;
+
+    // BSH-Querschnitt: h = Spannweite/15, gerundet auf 40 mm
+    const hRaw = (spannweite * 1000) / 15;
+    const h = Math.ceil(hRaw / 40) * 40;
+    const bsh_b = spannweite > 20 ? 200 : 160;
+    const isBogenbinder = spannweite > 24;
+    const material = isBogenbinder ? 'GL28h_curved' : (spannweite >= 20 ? 'GL28h' : 'GL24h');
+
+    members.push(makeMember({
+      idPrefix: 'HT',
+      name: `Hauptträger HT1-HT${traegerCount}`,
+      type: 'leimbinder',
+      material,
+      width: bsh_b,
+      height: h,
+      length: spannweite,
+      quantity: traegerCount,
+      crossSection: `${bsh_b / 10}/${h / 10}`,
+    }));
+
+    assumptions.push({
+      field: 'halle.mode',
+      value: 'aktiv',
+      reason: `Hallen-Modus aktiv: Spannweite ${spannweite} m > 14 m → BSH-Hauptträger statt klassischer Sparrenkonstruktion.`,
+      source: 'derived',
+    });
+    assumptions.push({
+      field: 'ht.spacing',
+      value: traegerAbstand,
+      reason: `Achsabstand Hauptträger ${traegerAbstand} m → ${traegerCount} Träger insgesamt.`,
+      source: 'standard',
+    });
+    assumptions.push({
+      field: 'ht.crossSection',
+      value: `${bsh_b}/${h}`,
+      reason: `BSH-Querschnitt aus Daumenregel h = L/15 = ${Math.round(hRaw)} mm → gerundet ${h} mm. Material ${material}.`,
+      source: 'derived',
+    });
+    if (isBogenbinder) {
+      assumptions.push({
+        field: 'ht.bogen',
+        value: `Pfeilhöhe ${Math.round(spannweite * 100)} cm`,
+        reason: `Spannweite ${spannweite} m > 24 m → gebogener BSH-Binder GL28h, Pfeilhöhe 10 % der Spannweite.`,
+        source: 'standard',
+      });
+    }
+
+    // Längspfetten (KVH auf Hauptträgern)
+    // Anzahl: bei Sattel ca 4-6 pro Seite (8-12 gesamt), bei Pult 5-8
+    const isPult = (geometry.roofPitch?.value ?? 30) < 5 || _roofType.form === 'pultdach';
+    const pfettenProSeite = isPult ? 6 : 4;
+    const totalPfetten = isPult ? pfettenProSeite : pfettenProSeite * 2;
+    members.push(makeMember({
+      idPrefix: 'LP',
+      name: `Längspfette P1-P${totalPfetten}`,
+      type: 'pfette',
+      material: 'C24',
+      width: 100,
+      height: 240,
+      length: traegerAbstand,  // pro Feld zwischen Hauptträgern
+      quantity: totalPfetten * (traegerCount - 1),  // mal Anzahl Felder
+      crossSection: '10/24',
+    }));
+    assumptions.push({
+      field: 'pfetten.raster',
+      value: pfettenProSeite,
+      reason: `${pfettenProSeite} Längspfetten pro Dachseite × ${traegerCount - 1} Felder = ${totalPfetten * (traegerCount - 1)} KVH-Stück.`,
+      source: 'standard',
+    });
+
+    // Kopfband bei jedem inneren Hauptträger (2 Stk pro Träger)
+    if (traegerCount > 2) {
+      const kopfbandCount = (traegerCount - 2) * 2;
+      members.push(makeMember({
+        idPrefix: 'KB',
+        name: `Kopfband KB1-KB${kopfbandCount}`,
+        type: 'rahm',
+        material: 'C24',
+        width: 100,
+        height: 120,
+        length: 1.5,
+        quantity: kopfbandCount,
+        crossSection: '10/12',
+      }));
+      assumptions.push({
+        field: 'kopfband',
+        value: `${kopfbandCount} Stück`,
+        reason: `Kopfband (45°-Knagge) zwischen Innenstütze und Hauptträger, 2 Stück pro Innenträger, 100/120 mm × 1,5 m.`,
+        source: 'standard',
+      });
+    }
+
+    const memberSummary = members.map(m => `${m.name} (${m.crossSection} ${m.material}, n=${m.quantity})`).join('; ');
+    const description =
+      `HALLE: BSH-Hauptträger ${bsh_b}/${h} mm ${material} mit ${traegerCount} Achsen à ${traegerAbstand} m. ` +
+      `Spannweite ${spannweite} m${isBogenbinder ? ' (gebogen, Pfeilhöhe 10 %)' : ''}. ` +
+      `${memberSummary}. Keine klassischen Sparren — Dachhaut direkt auf Längspfetten.`;
+    return { members, assumptions, description };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // KLASSISCH (Sparrendach / Pfettendach / Kehlbalken / etc.)
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // ── Sparren (alle Tragsysteme) ───────────────────────────────────────────
   const sparren = makeMember({
     idPrefix: 'SPR',
