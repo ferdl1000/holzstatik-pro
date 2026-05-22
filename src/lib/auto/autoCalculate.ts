@@ -16,8 +16,11 @@ import type { AutoCalculationResult, AutoAssumption } from './contracts';
 import { optimizeBeam } from '@/lib/calc/timber/optimizer';
 import { optimizeGlulam } from '@/lib/calc/timber/optimizer';
 import { calculateColumn } from '@/lib/calc/timber/column';
+import { calculateBeam } from '@/lib/calc/timber/beam';
+import { calculateGlulam } from '@/lib/calc/timber/glulam';
 import type { BeamInput } from '@/lib/calc/timber/beam';
 import type { GlulamBeamInput } from '@/lib/calc/timber/glulam';
+import { nextLargerProfile, KVH_PROFILES, BSH_PROFILES } from './standards';
 
 // ─── Typen ────────────────────────────────────────────────────────────────────
 
@@ -230,15 +233,30 @@ export function autoCalculateAllMembers(
         case 'rahm':
         case 'auswechslung':
         case 'nebentraeger': {
-          // Generische Schätzung: Nebenträger trägt halbes Feld
-          qg = loads.gk * sparrenSpacing * 0.5;
-          qs = loads.sk * sparrenSpacing * 0.5;
-          assumptions.push({
-            field: `${member.name}.last`,
-            value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
-            reason: `${member.type}: vereinfacht 50% Sparrenlast als Nebenträger angenommen`,
-            source: 'fallback',
-          });
+          // Deckenbalken: eigene Nutzlast statt Schneelast
+          if (member.name.startsWith('Deckenbalken')) {
+            const isSpitzboden = member.name.includes('Spitzboden');
+            const qk = isSpitzboden ? 1.0 : 2.0; // kN/m² Nutzlast
+            const beamSpacing = 0.8; // Standard-Achsabstand
+            qg = 1.5 * beamSpacing; // Eigengewicht Deckenaufbau ~1.5 kN/m²
+            qs = qk * beamSpacing;
+            assumptions.push({
+              field: `${member.name}.last`,
+              value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
+              reason: `Deckenbalken: Eigengewicht 1.5 kN/m² + Nutzlast ${qk} kN/m² (${isSpitzboden ? 'Spitzboden' : 'Wohnen'}) × Achsabstand ${beamSpacing} m`,
+              source: 'standard',
+            });
+          } else {
+            // Generische Schätzung: Nebenträger trägt halbes Feld
+            qg = loads.gk * sparrenSpacing * 0.5;
+            qs = loads.sk * sparrenSpacing * 0.5;
+            assumptions.push({
+              field: `${member.name}.last`,
+              value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
+              reason: `${member.type}: vereinfacht 50% Sparrenlast als Nebenträger angenommen`,
+              source: 'fallback',
+            });
+          }
           break;
         }
         default: {
@@ -291,9 +309,9 @@ export function autoCalculateAllMembers(
         });
 
       } else if (useGlulam) {
-        // Leimbinder: optimizeGlulam
+        // Leimbinder: optimizeGlulam → dann ggf. Profil hochstufen bis η ≤ 0.95
         const shape: GlulamBeamInput['shape'] = span > 12 ? 'pitched' : 'straight';
-        const glulamInput: Omit<GlulamBeamInput, 'b' | 'h' | 'timberClass'> & { preferredClasses?: string[] } = {
+        const glulamBaseInput: Omit<GlulamBeamInput, 'b' | 'h' | 'timberClass'> & { preferredClasses?: string[] } = {
           type: 'leimbinder',
           span,
           qPermanent: qg,
@@ -304,16 +322,89 @@ export function autoCalculateAllMembers(
           preferredClasses: ['GL24h', 'GL28h'],
         };
 
-        const optResult = optimizeGlulam(glulamInput);
+        const optResult = optimizeGlulam(glulamBaseInput);
+
+        // ── Upscaling-Loop: falls Optimizer-Ergebnis η > 0.95 ─────────────────
+        const MAX_ITER = 8;
+        const TARGET_ETA = 0.95;
+        let currentSection = { b: optResult.bestSection.b, h: optResult.bestSection.h, label: optResult.bestSection.label };
+        let currentClass = optResult.bestClass;
+        let currentResult = optResult.result;
+        let upscaleStatus: 'green' | 'yellow' | 'red' = currentResult.overallStatus;
+
+        // Optional: Prüfe ob kleineres Profil reicht (η < 0.5 → eine Stufe kleiner)
+        if (currentResult.maxUtilization < 0.5) {
+          const profileList = BSH_PROFILES;
+          const currentIdx = profileList.findIndex(p => p.b === currentSection.b && p.h === currentSection.h);
+          if (currentIdx > 0) {
+            const smallerSec = profileList[currentIdx - 1];
+            const testResult = calculateGlulam({
+              ...glulamBaseInput,
+              b: smallerSec.b,
+              h: smallerSec.h,
+              timberClass: currentClass,
+            });
+            if (testResult.maxUtilization <= TARGET_ETA) {
+              assumptions.push({
+                field: `iteration.${member.id ?? member.name}.downsize`,
+                value: `${currentSection.label}→${smallerSec.label} mm bei η=${testResult.maxUtilization.toFixed(2)}`,
+                reason: `η < 0.5 beim Optimizer-Ergebnis → kleineres BSH-Profil geprüft und ausreichend`,
+                source: 'derived',
+              });
+              currentSection = smallerSec;
+              currentResult = testResult;
+            }
+          }
+        }
+
+        if (currentResult.maxUtilization > TARGET_ETA) {
+          for (let iter = 0; iter < MAX_ITER; iter++) {
+            const prevLabel = currentSection.label;
+            const prevEta = currentResult.maxUtilization;
+            const next = nextLargerProfile({ b: currentSection.b, h: currentSection.h }, true);
+            if (!next) {
+              upscaleStatus = 'red';
+              assumptions.push({
+                field: `iteration.${member.id ?? member.name}.${iter + 1}`,
+                value: `${prevLabel} mm bei η=${prevEta.toFixed(2)} → Profil-Reihe ausgeschöpft`,
+                reason: `Kein größeres BSH-Standardprofil verfügbar – Bauteil als NICHT OK markiert`,
+                source: 'derived',
+              });
+              break;
+            }
+            const testResult = calculateGlulam({
+              ...glulamBaseInput,
+              b: next.b,
+              h: next.h,
+              timberClass: currentClass,
+            });
+            assumptions.push({
+              field: `iteration.${member.id ?? member.name}.${iter + 1}`,
+              value: `${prevLabel}→${next.label} mm bei η=${testResult.maxUtilization.toFixed(2)}`,
+              reason: `η=${prevEta.toFixed(2)} > 0.95 → Profil auf ${next.label} hochgestuft`,
+              source: 'derived',
+            });
+            currentSection = next;
+            currentResult = testResult;
+            if (testResult.maxUtilization <= TARGET_ETA) {
+              upscaleStatus = 'green';
+              break;
+            }
+          }
+        }
+
+        const finalSummary = currentResult.maxUtilization > TARGET_ETA && upscaleStatus === 'red'
+          ? `Profil-Reihe ausgeschöpft – kein BSH-Standardprofil ausreichend. ${optResult.reasoning}`
+          : optResult.reasoning;
 
         const entry: MemberCalcEntry = {
           member,
-          section: optResult.bestSection,
-          timberClass: optResult.bestClass,
-          maxUtilization: optResult.result.maxUtilization,
-          overallStatus: optResult.result.overallStatus,
-          summary: optResult.reasoning,
-          checks: optResult.result.checks.map(c => ({
+          section: currentSection,
+          timberClass: currentClass,
+          maxUtilization: currentResult.maxUtilization,
+          overallStatus: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
+          summary: finalSummary,
+          checks: currentResult.checks.map(c => ({
             name: c.name,
             utilization: c.utilization,
             status: c.status,
@@ -324,15 +415,15 @@ export function autoCalculateAllMembers(
 
         optimizedMembers.push({
           ...member,
-          width: optResult.bestSection.b,
-          height: optResult.bestSection.h,
-          crossSection: optResult.bestSection.label,
-          material: optResult.bestClass,
-          calculationStatus: optResult.result.overallStatus,
+          width: currentSection.b,
+          height: currentSection.h,
+          crossSection: currentSection.label,
+          material: currentClass,
+          calculationStatus: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
         });
 
       } else {
-        // KVH / Vollholz: optimizeBeam
+        // KVH / Vollholz: optimizeBeam → dann ggf. Profil hochstufen bis η ≤ 0.95
         const beamType = (
           member.type === 'sparren'    ? 'sparren'    :
           member.type === 'pfette'     ? 'pfette'     :
@@ -340,7 +431,7 @@ export function autoCalculateAllMembers(
           'nebentraeger'
         ) as BeamInput['type'];
 
-        const beamInput: Omit<BeamInput, 'b' | 'h' | 'timberClass'> & { preferredClasses?: string[] } = {
+        const beamBaseInput: Omit<BeamInput, 'b' | 'h' | 'timberClass'> & { preferredClasses?: string[] } = {
           type: beamType,
           span,
           qPermanent: qg,
@@ -350,16 +441,89 @@ export function autoCalculateAllMembers(
           preferredClasses: ['C24', 'C30'],
         };
 
-        const optResult = optimizeBeam(beamInput);
+        const optResult = optimizeBeam(beamBaseInput);
+
+        // ── Upscaling-Loop: falls Optimizer-Ergebnis η > 0.95 ─────────────────
+        const MAX_ITER_KVH = 8;
+        const TARGET_ETA_KVH = 0.95;
+        let currentSection = { b: optResult.bestSection.b, h: optResult.bestSection.h, label: optResult.bestSection.label };
+        let currentClass = optResult.bestClass;
+        let currentResult = optResult.result;
+        let upscaleStatus: 'green' | 'yellow' | 'red' = currentResult.overallStatus;
+
+        // Optional: Prüfe ob kleineres Profil reicht (η < 0.5 → eine Stufe kleiner)
+        if (currentResult.maxUtilization < 0.5) {
+          const profileList = KVH_PROFILES;
+          const currentIdx = profileList.findIndex(p => p.b === currentSection.b && p.h === currentSection.h);
+          if (currentIdx > 0) {
+            const smallerSec = profileList[currentIdx - 1];
+            const testResult = calculateBeam({
+              ...beamBaseInput,
+              b: smallerSec.b,
+              h: smallerSec.h,
+              timberClass: currentClass,
+            });
+            if (testResult.maxUtilization <= TARGET_ETA_KVH) {
+              assumptions.push({
+                field: `iteration.${member.id ?? member.name}.downsize`,
+                value: `${currentSection.label}→${smallerSec.label} mm bei η=${testResult.maxUtilization.toFixed(2)}`,
+                reason: `η < 0.5 beim Optimizer-Ergebnis → kleineres KVH-Profil geprüft und ausreichend`,
+                source: 'derived',
+              });
+              currentSection = smallerSec;
+              currentResult = testResult;
+            }
+          }
+        }
+
+        if (currentResult.maxUtilization > TARGET_ETA_KVH) {
+          for (let iter = 0; iter < MAX_ITER_KVH; iter++) {
+            const prevLabel = currentSection.label;
+            const prevEta = currentResult.maxUtilization;
+            const next = nextLargerProfile({ b: currentSection.b, h: currentSection.h }, false);
+            if (!next) {
+              upscaleStatus = 'red';
+              assumptions.push({
+                field: `iteration.${member.id ?? member.name}.${iter + 1}`,
+                value: `${prevLabel} mm bei η=${prevEta.toFixed(2)} → Profil-Reihe ausgeschöpft`,
+                reason: `Kein größeres KVH-Standardprofil verfügbar – Bauteil als NICHT OK markiert`,
+                source: 'derived',
+              });
+              break;
+            }
+            const testResult = calculateBeam({
+              ...beamBaseInput,
+              b: next.b,
+              h: next.h,
+              timberClass: currentClass,
+            });
+            assumptions.push({
+              field: `iteration.${member.id ?? member.name}.${iter + 1}`,
+              value: `${prevLabel}→${next.label} mm bei η=${testResult.maxUtilization.toFixed(2)}`,
+              reason: `η=${prevEta.toFixed(2)} > 0.95 → Profil auf ${next.label} hochgestuft`,
+              source: 'derived',
+            });
+            currentSection = next;
+            currentResult = testResult;
+            if (testResult.maxUtilization <= TARGET_ETA_KVH) {
+              upscaleStatus = 'green';
+              break;
+            }
+          }
+        }
+
+        const finalSummary = currentResult.maxUtilization > TARGET_ETA_KVH && upscaleStatus === 'red'
+          ? `Profil-Reihe ausgeschöpft – kein KVH-Standardprofil ausreichend. Empfehlung: auf BSH wechseln. ${optResult.reasoning}`
+          : optResult.reasoning;
 
         const entry: MemberCalcEntry = {
           member,
-          section: optResult.bestSection,
-          timberClass: optResult.bestClass,
-          maxUtilization: optResult.result.maxUtilization,
-          overallStatus: optResult.result.overallStatus,
-          summary: optResult.reasoning,
-          checks: optResult.result.checks.map(c => ({
+          section: currentSection,
+          timberClass: currentClass,
+          maxUtilization: currentResult.maxUtilization,
+          overallStatus: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
+          summary: finalSummary,
+          checks: currentResult.checks.map(c => ({
             name: c.name,
             utilization: c.utilization,
             status: c.status,
@@ -370,11 +534,11 @@ export function autoCalculateAllMembers(
 
         optimizedMembers.push({
           ...member,
-          width: optResult.bestSection.b,
-          height: optResult.bestSection.h,
-          crossSection: optResult.bestSection.label,
-          material: optResult.bestClass,
-          calculationStatus: optResult.result.overallStatus,
+          width: currentSection.b,
+          height: currentSection.h,
+          crossSection: currentSection.label,
+          material: currentClass,
+          calculationStatus: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
         });
       }
 

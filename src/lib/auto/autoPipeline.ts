@@ -63,6 +63,7 @@ function prefixMemberIds(members: TimberMember[], prefix: string): TimberMember[
 export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPipelineResult> {
   const { project } = input;
   const sparrenSpacing = input.sparrenSpacing ?? 0.8;
+  const ceilings = input.ceilings ?? project.ceilings;
 
   // ── 1. Geometrie ableiten ────────────────────────────────────────────────
   const roofTypeRaw = project.roofType ?? {
@@ -129,7 +130,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
         derivedPartGeom.geometry,
         partRoofType,
         partStructSystem,
-        { sparrenSpacing },
+        { sparrenSpacing, ceilings },
       );
 
       const prefixedMembers = prefixMemberIds(partMembersResult.members, rp.id);
@@ -154,7 +155,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       derivedGeometry.geometry,
       roofTypeRaw,
       structuralSystemRaw,
-      { sparrenSpacing },
+      { sparrenSpacing, ceilings },
     );
   }
 
@@ -180,7 +181,12 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   );
 
   // ── 6. Kosten ────────────────────────────────────────────────────────────
-  const costsResult = await autoComputeCosts(calculationsResult.optimizedMembers, derivedGeometry.geometry);
+  const costsResult = await autoComputeCosts(calculationsResult.optimizedMembers, derivedGeometry.geometry, {
+    joints: membersResult.joints,
+    roofForm: project.roofType?.form ?? 'satteldach',
+    includeDeckPlanks: true,
+    includeTransport: true,
+  });
 
   // ── 7. Alle Annahmen zusammenfassen ──────────────────────────────────────
   const allAssumptions: AutoAssumption[] = [
@@ -213,9 +219,12 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     : 0;
   const brutto = costsResult.withLabor?.gross ?? costsResult.materialOnly?.gross ?? 0;
   const roofPartsLabel = hasMultiParts ? `, ${project.roofParts!.length} Dachteile` : '';
+  const ceilingsLabel = ceilings && ceilings.length > 0
+    ? `, +${ceilings.length} Holzbalkendecke${ceilings.length > 1 ? 'n' : ''} (${ceilings.map(c => c.level).join('/')})`
+    : '';
 
   const summary =
-    `Dachneigung ${roofPitch.toFixed(1)}°${roofPartsLabel}, ${sparrenCount} Sparren, ` +
+    `Dachneigung ${roofPitch.toFixed(1)}°${roofPartsLabel}${ceilingsLabel}, ${sparrenCount} Sparren, ` +
     `max. Ausnutzung η=${maxEta.toFixed(2)}, ` +
     `Bruttosumme ${brutto.toLocaleString('de-AT', { style: 'currency', currency: 'EUR' })}.`;
 
@@ -232,5 +241,6 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     confidenceScore,
     summary,
     ...(updatedRoofParts ? { roofParts: updatedRoofParts } : {}),
+    ...(membersResult.joints && membersResult.joints.length > 0 ? { joints: membersResult.joints } : {}),
   };
 }

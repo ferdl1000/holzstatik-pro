@@ -11,7 +11,9 @@
 import type { TimberMember, BuildingGeometry } from '@/types/project';
 import type { RoofPart } from '@/types/roofParts';
 import type { AutoCostResult, OrderListItem } from './contracts';
-import type { CostEstimate } from '@/lib/pricing';
+import type { CostEstimate, CostPosition } from '@/lib/pricing';
+import type { JointSpec, TransportPlan } from '@/lib/auto/standards';
+import { suggestDeckPlanks, computeTransportPlan } from '@/lib/auto/standards';
 import { estimateCost } from '@/lib/pricing/estimator';
 import { DEFAULT_FACTORS } from '@/lib/pricing/database';
 
@@ -21,6 +23,18 @@ interface AutoCostOptions {
   roofParts?: RoofPart[];
   /** Zimmerei-Modus (default): nur Holz + Verbinder + Lohn. Keine Eindeckung/Dämmung/Folien. */
   zimmereiOnly?: boolean;
+  /** Stoßstellen aus autoMembers */
+  joints?: JointSpec[];
+  /** Dachform für Verschalung-Empfehlung */
+  roofForm?: string;
+  /** Verschalung/Lattung mit-kalkulieren (default true für Zimmerei) */
+  includeDeckPlanks?: boolean;
+  /** Transport-Plan automatisch dazu rechnen (default true) */
+  includeTransport?: boolean;
+}
+
+export interface AutoCostExtras {
+  transport?: TransportPlan;
 }
 
 export interface RoofPartCostEntry {
@@ -33,6 +47,50 @@ export interface RoofPartCostEntry {
 
 export interface AutoCostResultExt extends AutoCostResult {
   byRoofPart?: RoofPartCostEntry[];
+  transport?: TransportPlan;
+}
+
+/** Erzeugt CostPositions für Verschalung + Lattung */
+function buildDeckPlankPositions(roofForm: string, hasLeimbinder: boolean, roofArea: number): CostPosition[] {
+  if (roofArea <= 0) return [];
+  const planks = suggestDeckPlanks(roofForm, hasLeimbinder);
+  const out: CostPosition[] = [];
+  planks.forEach((p, idx) => {
+    // Preis pro lfm aus Volumen: 540 €/m³ × Querschnitt × lfm
+    const lfm = p.lfmPerM2 > 0 ? roofArea * p.lfmPerM2 * 1.1 /* 10% Verschnitt */ : roofArea;
+    const unit = p.lfmPerM2 > 0 ? 'lfm' : 'm²';
+    const vol_per_unit = p.lfmPerM2 > 0
+      ? (p.b / 1000) * (p.h / 1000)        // m³/lfm
+      : (p.h / 1000);                       // m³/m² für Vollschalung
+    const pricePerM3 = 540;
+    const unitPrice = +(vol_per_unit * pricePerM3).toFixed(2);
+    out.push({
+      id: `plank_${idx}`,
+      description: `${p.name} (${p.description})`,
+      category: 'Holz',
+      quantity: Math.round(lfm),
+      unit,
+      unitPrice,
+      total: +(lfm * unitPrice).toFixed(2),
+      notes: 'Inkl. 10% Verschnitt',
+    });
+  });
+  return out;
+}
+
+/** Transport-Positionen aus computeTransportPlan ableiten */
+function buildTransportPositions(plan: TransportPlan): CostPosition[] {
+  if (plan.segments.length === 0) return [];
+  return plan.segments.map((s, idx) => ({
+    id: `transport_${idx}`,
+    description: `Transport-Segment ${s.segmentIndex}: ${s.length_m.toFixed(1)} m, ${s.category}`,
+    category: 'Lohn',
+    quantity: 1,
+    unit: 'pauschal',
+    unitPrice: s.extraCost,
+    total: s.extraCost,
+    notes: s.note,
+  }));
 }
 
 /** Dachfläche (Schräge) aus Grundriss + Neigung */
@@ -89,6 +147,67 @@ function buildMaterialOnly(full: CostEstimate): CostEstimate {
     ],
     summary: `Nur Material brutto: ${gross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${baseSum.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
     explanation: full.explanation,
+  };
+}
+
+/** Erzeugt CostPosition-Einträge für Stoßstellen (Verbinder + optionaler Lohn) */
+function buildJointPositions(joints: JointSpec[], withLabor: boolean): CostPosition[] {
+  if (joints.length === 0) return [];
+  const positions: CostPosition[] = [];
+  joints.forEach((j, idx) => {
+    positions.push({
+      id: `joint_connector_${idx}`,
+      description: `Stoß ${j.type} bei ${j.position.toFixed(2)} m – ${j.notes}`,
+      category: 'Verbinder',
+      quantity: 1,
+      unit: 'Stk',
+      unitPrice: j.extraCost,
+      total: j.extraCost,
+      source: 'default' as const,
+      notes: `Stoßlasche/Bolzen pauschal`,
+    });
+    if (withLabor) {
+      positions.push({
+        id: `joint_labor_${idx}`,
+        description: `Stoß ausführen bei ${j.position.toFixed(2)} m`,
+        category: 'Lohn',
+        quantity: 1,
+        unit: 'h',
+        unitPrice: 75,
+        total: 75,
+        source: 'default' as const,
+        notes: `Zimmererleistung Stoß, 1 h à 75 €`,
+      });
+    }
+  });
+  return positions;
+}
+
+/** Fügt Stoßstellen-Positionen in eine CostEstimate ein und aktualisiert Subtotals/Net/Vat/Gross */
+function injectJointsIntoEstimate(estimate: CostEstimate, joints: JointSpec[], withLabor: boolean): CostEstimate {
+  const jointPositions = buildJointPositions(joints, withLabor);
+  if (jointPositions.length === 0) return estimate;
+  const positions = [...estimate.positions, ...jointPositions];
+  const addFasteners = jointPositions.filter(p => p.category === 'Verbinder').reduce((s, p) => s + p.total, 0);
+  const addLabor = jointPositions.filter(p => p.category === 'Lohn').reduce((s, p) => s + p.total, 0);
+  const addNet = addFasteners + addLabor;
+  const newNet = estimate.net + addNet;
+  // Recalculate vat and gross proportionally (reuse existing vatRate)
+  const vatRate = estimate.factors.vat;
+  const newVat = estimate.vat + addNet * vatRate / 100;
+  const newGross = newNet + newVat;
+  return {
+    ...estimate,
+    positions,
+    subtotals: {
+      ...estimate.subtotals,
+      fasteners: estimate.subtotals.fasteners + addFasteners,
+      labor: estimate.subtotals.labor + addLabor,
+    },
+    net: newNet,
+    vat: newVat,
+    gross: newGross,
+    summary: `Gesamt brutto: ${newGross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${newNet.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
   };
 }
 
@@ -226,6 +345,51 @@ export function autoComputeCosts(
   const insulationId = opts?.insulationId ?? 'ins_mw_200';
   const roofParts = opts?.roofParts;
   const zimmereiOnly = opts?.zimmereiOnly ?? true;  // Default: Zimmerei-Modus
+  const joints = opts?.joints ?? [];
+  const roofForm = opts?.roofForm ?? 'satteldach';
+  const includeDeckPlanks = opts?.includeDeckPlanks ?? true;
+  const includeTransport = opts?.includeTransport ?? true;
+
+  // Helper: Verschalung + Transport in eine CostEstimate einfügen
+  const hasLeimbinder = members.some(m => m.type === 'leimbinder');
+  const totalRoofArea = roofParts && roofParts.length > 0
+    ? roofParts.reduce((s, p) => s + p.geometry.length * (p.geometry.width / Math.cos((p.geometry.pitch * Math.PI) / 180)), 0)
+    : calcRoofArea(geometry);
+  const transportPlan = includeTransport ? computeTransportPlan(members) : undefined;
+  const plankPositions = includeDeckPlanks ? buildDeckPlankPositions(roofForm, hasLeimbinder, totalRoofArea) : [];
+  const transportPositions = transportPlan ? buildTransportPositions(transportPlan) : [];
+
+  function injectExtras(est: CostEstimate, withLaborMode: boolean): CostEstimate {
+    const extras: CostPosition[] = [
+      ...plankPositions,
+      ...(withLaborMode ? transportPositions : []),  // Transport nur in withLabor
+    ];
+    if (extras.length === 0) return est;
+    const positions = [...est.positions, ...extras];
+    const addNet = extras.reduce((s, p) => s + p.total, 0);
+    const vatRate = est.factors.vat;
+    const newNet = est.net + addNet;
+    const newVat = est.vat + addNet * vatRate / 100;
+    const newGross = newNet + newVat;
+    const addMaterial = plankPositions.reduce((s, p) => s + p.total, 0);
+    const addLabor = withLaborMode ? transportPositions.reduce((s, p) => s + p.total, 0) : 0;
+    return {
+      ...est,
+      positions,
+      subtotals: {
+        ...est.subtotals,
+        material: est.subtotals.material + addMaterial,
+        labor: est.subtotals.labor + addLabor,
+      },
+      net: newNet, vat: newVat, gross: newGross,
+      summary: `Gesamt brutto: ${newGross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${newNet.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
+    };
+  }
+  const extraOrderItems: OrderListItem[] = plankPositions.map(p => ({
+    supplier: 'Sägewerk' as const,
+    description: p.description, quantity: p.quantity, unit: p.unit,
+    unitPrice: p.unitPrice, total: p.total, notes: p.notes,
+  }));
 
   // ── Fall 1: roofParts vorhanden → pro Dachteil berechnen ──
   if (roofParts && roofParts.length > 0) {
@@ -252,17 +416,38 @@ export function autoComputeCosts(
     });
 
     // Aggregierte Gesamtsumme
-    const materialOnly = aggregateEstimates(byRoofPart.map(p => p.materialOnly));
-    const withLabor = aggregateEstimates(byRoofPart.map(p => p.withLabor));
-    const orderList = byRoofPart.flatMap(p => p.orderList);
+    let materialOnly = aggregateEstimates(byRoofPart.map(p => p.materialOnly));
+    let withLabor = aggregateEstimates(byRoofPart.map(p => p.withLabor));
+    let orderList = byRoofPart.flatMap(p => p.orderList);
 
-    return { materialOnly, withLabor, orderList, byRoofPart };
+    // Stoßstellen-Kosten in Gesamtsumme einarbeiten
+    if (joints.length > 0) {
+      materialOnly = injectJointsIntoEstimate(materialOnly, joints, false);
+      withLabor = injectJointsIntoEstimate(withLabor, joints, true);
+      const jointOrderItems: OrderListItem[] = joints.map((j, idx) => ({
+        supplier: 'Verbinder' as const,
+        description: `Stoß ${j.type} bei ${j.position.toFixed(2)} m`,
+        quantity: 1,
+        unit: 'Stk',
+        unitPrice: j.extraCost,
+        total: j.extraCost,
+        notes: j.notes,
+      }));
+      orderList = [...orderList, ...jointOrderItems];
+    }
+
+    // Verschalung + Transport einfügen
+    materialOnly = injectExtras(materialOnly, false);
+    withLabor = injectExtras(withLabor, true);
+    orderList = [...orderList, ...extraOrderItems];
+
+    return { materialOnly, withLabor, orderList, byRoofPart, transport: transportPlan };
   }
 
   // ── Fall 2: kein roofParts → bestehendes Verhalten ──
   const roofArea = calcRoofArea(geometry);
   const groundArea = calcGroundArea(geometry);
-  const { materialOnly, withLabor, orderList } = computeForMembers(
+  let { materialOnly, withLabor, orderList } = computeForMembers(
     members,
     roofArea,
     groundArea,
@@ -272,5 +457,26 @@ export function autoComputeCosts(
     zimmereiOnly,
   );
 
-  return { materialOnly, withLabor, orderList };
+  // Stoßstellen-Kosten einfügen
+  if (joints.length > 0) {
+    materialOnly = injectJointsIntoEstimate(materialOnly, joints, false);
+    withLabor = injectJointsIntoEstimate(withLabor, joints, true);
+    const jointOrderItems: OrderListItem[] = joints.map((j) => ({
+      supplier: 'Verbinder' as const,
+      description: `Stoß ${j.type} bei ${j.position.toFixed(2)} m`,
+      quantity: 1,
+      unit: 'Stk',
+      unitPrice: j.extraCost,
+      total: j.extraCost,
+      notes: j.notes,
+    }));
+    orderList = [...orderList, ...jointOrderItems];
+  }
+
+  // Verschalung + Transport
+  materialOnly = injectExtras(materialOnly, false);
+  withLabor = injectExtras(withLabor, true);
+  orderList = [...orderList, ...extraOrderItems];
+
+  return { materialOnly, withLabor, orderList, transport: transportPlan };
 }

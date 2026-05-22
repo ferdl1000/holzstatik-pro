@@ -172,6 +172,22 @@ serve(async (req) => {
       log.push('ℹ RoofParts: Nur Hauptdach (kein multi-part-Ergebnis aus Extraktion)');
     }
 
+    // ceilings: Holzbalkendecken durchreichen
+    const extractedCeilings = (extracted.ceilings as Array<any> | undefined);
+    if (extractedCeilings && extractedCeilings.length > 0) {
+      projectUpdate.ceilings = extractedCeilings.map((c: any, i: number) => ({
+        id: c.id ?? `ceil_${i}`,
+        level: c.level ?? 'EG',
+        area: c.area ?? 0,
+        span: c.span ?? 0,
+        nutzung: c.nutzung ?? 'Wohnen',
+        confidence: c.confidence ?? 0.5,
+      }));
+      log.push(`✓ Ceilings: ${projectUpdate.ceilings.length} Holzbalkendecke(n) erkannt (${projectUpdate.ceilings.map((c: any) => c.level).join(', ')})`);
+    } else {
+      log.push('ℹ Ceilings: Keine Holzbalkendecken erkannt');
+    }
+
     await supabase.from('projects')
       .update({
         project_data: projectUpdate,

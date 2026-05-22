@@ -7,8 +7,10 @@
  * - Tragsystem (StructuralSystem)
  */
 
-import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember } from '@/types/project';
+import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember, CeilingArea } from '@/types/project';
 import type { AutoAssumption, AutoMembersResult } from '@/lib/auto/contracts';
+import type { JointSpec } from '@/lib/auto/standards';
+import { splitMemberAtJoints, suggestCeilingBeam } from '@/lib/auto/standards';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Hilfsfunktionen
@@ -49,7 +51,7 @@ export function autoGenerateMembers(
   geometry: BuildingGeometry,
   _roofType: RoofType,
   structuralSystem: StructuralSystem,
-  opts?: { sparrenSpacing?: number },
+  opts?: { sparrenSpacing?: number; ceilings?: CeilingArea[] },
 ): AutoMembersResult {
   _idCounter = 0; // reset für deterministische IDs
 
@@ -179,12 +181,44 @@ export function autoGenerateMembers(
       });
     }
 
+    // Deckenbalken für Hallen-Modus
+    if (opts?.ceilings && opts.ceilings.length > 0) {
+      for (const ceiling of opts.ceilings) {
+        const spec = { span: ceiling.span, area: ceiling.area, nutzung: ceiling.nutzung };
+        const { b, h: dh, spacing } = suggestCeilingBeam(spec);
+        const orthoSpan = ceiling.area / ceiling.span;
+        const count = Math.ceil(orthoSpan / spacing);
+        const cs = `${b / 10}/${dh / 10}`;
+        members.push(makeMember({
+          idPrefix: 'DB',
+          name: `Deckenbalken ${ceiling.level}`,
+          type: 'nebentraeger',
+          material: 'C24',
+          width: b,
+          height: dh,
+          length: ceiling.span,
+          quantity: count,
+          crossSection: cs,
+        }));
+        assumptions.push({
+          field: `decke.${ceiling.id}`,
+          value: `${count}× ${cs} C24 @ ${spacing * 100} cm`,
+          reason: `Holzbalkendecke ${ceiling.level} (${ceiling.nutzung}, ${ceiling.area} m², Spannweite ${ceiling.span} m): ` +
+            `${count} Deckenbalken ${cs} C24, Achsabstand ${spacing * 100} cm.`,
+          source: 'derived',
+        });
+      }
+    }
+
     const memberSummary = members.map(m => `${m.name} (${m.crossSection} ${m.material}, n=${m.quantity})`).join('; ');
     const description =
       `HALLE: BSH-Hauptträger ${bsh_b}/${h} mm ${material} mit ${traegerCount} Achsen à ${traegerAbstand} m. ` +
       `Spannweite ${spannweite} m${isBogenbinder ? ' (gebogen, Pfeilhöhe 10 %)' : ''}. ` +
       `${memberSummary}. Keine klassischen Sparren — Dachhaut direkt auf Längspfetten.`;
-    return { members, assumptions, description };
+
+    // Stoßstellen-Aufteilung (Hallen-Modus)
+    const { splitMembers: halleSplitMembers, joints: halleJoints } = applySplitJoints(members, [], assumptions);
+    return { members: halleSplitMembers, assumptions, description, joints: halleJoints };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -344,6 +378,31 @@ export function autoGenerateMembers(
       reason: 'Standard-Querschnitt 10/10 cm C24 für Pfettenstützen angenommen.',
       source: 'standard',
     });
+
+    // Zwischensteher (Auflagerung Sparren in der Mitte) wenn Sparrenstützweite > 3.5 m
+    const halfSpan = buildingWidth / 2;  // klassische Sparrenstützweite ist halbe Gebäudebreite
+    if (halfSpan > 3.5) {
+      const zwischenAbstand = 0.8 * 2; // jeder 2. Sparren
+      const zwischenstAnzahl = Math.max(2, Math.ceil(buildingLength / zwischenAbstand) * 2); // beide Seiten
+      const zwischenstHoehe = +(ridgeHeight * 0.5).toFixed(2);
+      members.push(makeMember({
+        idPrefix: 'ZS',
+        name: `Zwischensteher ZS1-ZS${zwischenstAnzahl}`,
+        type: 'stuetze',
+        material: 'C24',
+        width: 100,
+        height: 100,
+        length: zwischenstHoehe,
+        quantity: zwischenstAnzahl,
+        crossSection: '10/10',
+      }));
+      assumptions.push({
+        field: 'zwischensteher',
+        value: `${zwischenstAnzahl} Stk`,
+        reason: `Sparrenstützweite ${halfSpan.toFixed(1)} m > 3,5 m → Zwischensteher in halber Höhe alle 1.6 m (jeder 2. Sparren), beide Dachseiten. Höhe ${zwischenstHoehe} m, 10/10 cm.`,
+        source: 'derived',
+      });
+    }
   }
 
   if (sysType === 'leimbinder_haupttraeger') {
@@ -394,5 +453,75 @@ export function autoGenerateMembers(
     `Sparrenabstand ${spacing * 100} cm, Sparrenlänge ${sparrenLen} m. ` +
     `Alle Querschnitte vorläufig (calculationStatus=yellow), Optimizer-Schritt ausstehend.`;
 
-  return { members, assumptions, description };
+  // ── Deckenbalken aus erkannten Holzbalkendecken ───────────────────────────
+  if (opts?.ceilings && opts.ceilings.length > 0) {
+    for (const ceiling of opts.ceilings) {
+      const spec = { span: ceiling.span, area: ceiling.area, nutzung: ceiling.nutzung };
+      const { b, h, spacing } = suggestCeilingBeam(spec);
+      const orthoSpan = ceiling.area / ceiling.span;
+      const count = Math.ceil(orthoSpan / spacing);
+      const cs = `${b / 10}/${h / 10}`;
+      members.push(makeMember({
+        idPrefix: 'DB',
+        name: `Deckenbalken ${ceiling.level}`,
+        type: 'nebentraeger',
+        material: 'C24',
+        width: b,
+        height: h,
+        length: ceiling.span,
+        quantity: count,
+        crossSection: cs,
+      }));
+      assumptions.push({
+        field: `decke.${ceiling.id}`,
+        value: `${count}× ${cs} C24 @ ${spacing * 100} cm`,
+        reason: `Holzbalkendecke ${ceiling.level} (${ceiling.nutzung}, ${ceiling.area} m², Spannweite ${ceiling.span} m): ` +
+          `${count} Deckenbalken ${cs} C24, Achsabstand ${spacing * 100} cm (Daumenregel h=L/${spec.nutzung === 'Spitzboden' ? 20 : 17}).`,
+        source: 'derived',
+      });
+    }
+  }
+
+  // Stoßstellen-Aufteilung: Stützpositionen aus Stützen ableiten
+  const stuetzen = members.filter(m => m.type === 'stuetze');
+  const stuetzPositions: number[] = [];
+  if (stuetzen.length > 0) {
+    const stuetzenAbstand = 4.0;
+    const stuetzenAnz = Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1);
+    for (let i = 1; i <= stuetzenAnz; i++) {
+      stuetzPositions.push(+(i * stuetzenAbstand).toFixed(2));
+    }
+  }
+
+  const { splitMembers, joints } = applySplitJoints(members, stuetzPositions, assumptions);
+  return { members: splitMembers, assumptions, description, joints };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Hilfsfunktion: Stoßstellen-Aufteilung
+// ────────────────────────────────────────────────────────────────────────────
+
+function applySplitJoints(
+  members: TimberMember[],
+  supportPositions: number[],
+  assumptions: AutoAssumption[],
+): { splitMembers: TimberMember[]; joints: JointSpec[] } {
+  const splitMembers: TimberMember[] = [];
+  const allJoints: JointSpec[] = [];
+
+  for (const member of members) {
+    const { segments, joints } = splitMemberAtJoints(member, supportPositions.length > 0 ? supportPositions : undefined);
+    splitMembers.push(...segments);
+    allJoints.push(...joints);
+    if (joints.length > 0) {
+      assumptions.push({
+        field: `stoss.${member.id}`,
+        value: joints.length,
+        reason: `${member.name} (L=${member.length} m) überschreitet Standard-Lieferlänge → ${joints.length} Stoß/Stöße bei ${joints.map(j => j.position.toFixed(2) + ' m').join(', ')}.`,
+        source: 'standard',
+      });
+    }
+  }
+
+  return { splitMembers, joints: allJoints };
 }

@@ -13,6 +13,7 @@ import { useState, useMemo } from 'react';
 import type { Project } from '@/types/project';
 import type { RoofPart, RoofPartKind, ProjectRoofParts } from '@/types/roofParts';
 import type { OrderListItem } from '@/lib/auto/contracts';
+import type { JointSpec } from '@/lib/auto/standards';
 import type { CostPosition } from '@/lib/pricing';
 import type { AutoCostResultExt, RoofPartCostEntry } from '@/lib/auto/autoCost';
 import { autoComputeCosts } from '@/lib/auto/autoCost';
@@ -30,6 +31,7 @@ type ProjectWithRoofParts = Project & ProjectRoofParts;
 
 interface BillOfMaterialsTabProps {
   project: ProjectWithRoofParts;
+  joints?: JointSpec[];
 }
 
 // ── CSV helpers ──────────────────────────────────────────────────────────────
@@ -251,7 +253,7 @@ function RoofPartsOverview({ roofParts, byRoofPart }: RoofPartsOverviewProps) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function BillOfMaterialsTab({ project }: BillOfMaterialsTabProps) {
+export function BillOfMaterialsTab({ project, joints }: BillOfMaterialsTabProps) {
   const { toast } = useToast();
 
   // Per-position price overrides (id → unitPrice) for both estimate variants
@@ -262,8 +264,8 @@ export function BillOfMaterialsTab({ project }: BillOfMaterialsTabProps) {
   const base = useMemo((): AutoCostResultExt | null => {
     if (!project.geometry) return null;
     const roofParts = project.roofParts && project.roofParts.length > 0 ? project.roofParts : undefined;
-    return autoComputeCosts(project.members || [], project.geometry, { roofParts });
-  }, [project.members, project.geometry, project.roofParts]);
+    return autoComputeCosts(project.members || [], project.geometry, { roofParts, joints });
+  }, [project.members, project.geometry, project.roofParts, joints]);
 
   // Apply per-position overrides to CostPosition arrays
   const materialPositions: CostPosition[] = useMemo(() => {
@@ -604,6 +606,31 @@ export function BillOfMaterialsTab({ project }: BillOfMaterialsTabProps) {
                     renderSupplierCard(supplier, items, 'flat'),
                   )
               }
+
+              {/* Stoßstellen-Sektion */}
+              {joints && joints.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <h4 className="font-semibold text-sm px-1 text-amber-700 dark:text-amber-400">Stoßstellen ({joints.length} Stk)</h4>
+                  <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-2 px-3 py-1.5 bg-muted/50 rounded text-xs font-semibold text-muted-foreground">
+                    <span>Position / Typ</span>
+                    <span>Hinweis</span>
+                    <span className="text-right">Mehrkosten [€]</span>
+                    <span />
+                  </div>
+                  {joints.map((j, idx) => (
+                    <div key={idx} className="grid grid-cols-[2fr_1fr_1fr_80px] gap-2 px-3 py-1.5 hover:bg-muted/20 rounded text-xs items-start">
+                      <span className="font-medium">{j.type} bei {j.position.toFixed(2)} m</span>
+                      <span className="text-muted-foreground text-xs leading-snug">{j.notes}</span>
+                      <span className="text-right tabular-nums font-medium">{j.extraCost.toLocaleString('de-AT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €</span>
+                      <span />
+                    </div>
+                  ))}
+                  <div className="flex justify-between px-3 py-2 bg-amber-50 dark:bg-amber-950/30 rounded text-xs font-semibold">
+                    <span>Stoßstellen-Mehrkosten gesamt</span>
+                    <span className="tabular-nums">{joints.reduce((s, j) => s + j.extraCost, 0).toLocaleString('de-AT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € netto</span>
+                  </div>
+                </div>
+              )}
 
               {/* Grand total */}
               <div className="flex justify-between items-center px-4 py-3 bg-primary/10 rounded-lg font-bold text-base">

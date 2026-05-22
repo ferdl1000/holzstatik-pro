@@ -15,9 +15,10 @@
  * JEDE Annahme wird in `assumptions[]` protokolliert, damit User später ändern kann.
  */
 
-import type { Project, BuildingGeometry, RoofType, StructuralSystem, TimberMember, LoadCase } from '@/types/project';
+import type { Project, BuildingGeometry, RoofType, StructuralSystem, TimberMember, LoadCase, CeilingArea } from '@/types/project';
 import type { RoofPart } from '@/types/roofParts';
 import type { CostEstimate } from '@/lib/pricing';
+import type { JointSpec } from '@/lib/auto/standards';
 
 export interface AutoAssumption {
   field: string;
@@ -35,6 +36,7 @@ export interface AutoMembersResult {
   members: TimberMember[];
   assumptions: AutoAssumption[];
   description: string;
+  joints?: JointSpec[];
 }
 
 export interface AutoLoadsResult {
@@ -92,6 +94,8 @@ export interface AutoPipelineResult {
   loads: AutoLoadsResult;
   calculations: AutoCalculationResult;
   costs: AutoCostResult;
+  /** Stoßstellen aus Bauteil-Aufteilung */
+  joints?: JointSpec[];
   /** Gesamtsumme aller Annahmen */
   allAssumptions: AutoAssumption[];
   /** "Komplett bestätigte Werte ohne Annahme" Quote */
@@ -110,4 +114,6 @@ export interface AutoPipelineInput {
   roofComposition?: 'ziegel_standard' | 'blech' | 'gruendach';
   /** Mit oder ohne Optimizer (default true) */
   useOptimizer?: boolean;
+  /** Optionales Override: Decken-Liste (überschreibt project.ceilings) */
+  ceilings?: CeilingArea[];
 }

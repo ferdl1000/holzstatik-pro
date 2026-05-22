@@ -15,6 +15,16 @@ export interface AgentResult<T = unknown> {
   timestamp: string;
 }
 
+// ===== Ceiling Areas =====
+export interface CeilingArea {
+  id: string;
+  level: string;            // "EG", "OG", "Spitzboden"
+  area: number;             // m² Grundfläche
+  span: number;             // m längere Spannweite
+  nutzung: 'Wohnen' | 'Lager' | 'Versammlung' | 'Spitzboden';
+  confidence: number;
+}
+
 // ===== Project =====
 export interface Project {
   id: string;
@@ -37,6 +47,8 @@ export interface Project {
   auditEntries: AuditEntry[];
   /** Multi-Dachteil-Erweiterung: erkannte Dachteile mit je eigener Geometrie + Bauteilen */
   roofParts?: RoofPart[];
+  /** Erkannte Zwischendecken / Holzbalkendecken */
+  ceilings?: CeilingArea[];
 }
 
 // ===== Documents =====
