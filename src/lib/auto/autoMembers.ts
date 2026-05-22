@@ -11,6 +11,7 @@ import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember, Ceilin
 import type { AutoAssumption, AutoMembersResult } from '@/lib/auto/contracts';
 import type { JointSpec } from '@/lib/auto/standards';
 import { splitMemberAtJoints, suggestCeilingBeam } from '@/lib/auto/standards';
+import { sanitizeGeometry, sanitizeStructuralSystemType } from '@/lib/auto/sanitize';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Hilfsfunktionen
@@ -57,6 +58,20 @@ export function autoGenerateMembers(
 
   const assumptions: AutoAssumption[] = [];
   const members: TimberMember[] = [];
+
+  // ── Sanity-Check Geometrie (Schutz gegen NaN/Infinity/negative Werte) ────
+  const sanitized = sanitizeGeometry(geometry);
+  if (sanitized.assumptions.length > 0) {
+    assumptions.push(...sanitized.assumptions);
+    geometry = sanitized.geometry; // eslint-disable-line no-param-reassign
+  }
+
+  // ── Sanity-Check Tragsystem ───────────────────────────────────────────────
+  const sysSanitized = sanitizeStructuralSystemType(structuralSystem.type);
+  if (sysSanitized.assumption) {
+    assumptions.push(sysSanitized.assumption);
+    structuralSystem = { ...structuralSystem, type: sysSanitized.type }; // eslint-disable-line no-param-reassign
+  }
 
   const spacing = opts?.sparrenSpacing ?? 0.8;
   if (!opts?.sparrenSpacing) {

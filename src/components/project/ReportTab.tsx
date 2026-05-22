@@ -4,7 +4,9 @@ import { SectionCard } from '@/components/shared/SectionCard';
 import { Button } from '@/components/ui/button';
 import { FileText, Download, ClipboardList, TreePine, Shield, History, Loader2, FileCheck2 } from 'lucide-react';
 import { downloadReport } from '@/lib/report/generator';
+import type { ReportExtras } from '@/lib/report/generator';
 import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
+import { computeTransportPlan } from '@/lib/auto/standards';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
@@ -49,9 +51,31 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
         factors: DEFAULT_FACTORS,
       }) : undefined;
 
+      // Build extras: joints come from pipeline result stored in project.calculations
+      // (if the pipeline wrote joints into the first calculation entry's custom field),
+      // transport is computed on the fly from current members.
+      const members = project.members ?? [];
+      const transport = members.length > 0 ? computeTransportPlan(members) : undefined;
+
+      // Joints: the auto-pipeline stores them on AutoMembersResult; here we look for
+      // any joints that may have been persisted in a custom field on the project object.
+      const pipelineResult = (project as any)._pipelineResult;
+      const joints = pipelineResult?.joints ?? pipelineResult?.members?.joints ?? undefined;
+
+      // Openings / special features / plan quality from extracted pipeline data
+      const extracted = (project as any)._extracted;
+      const extras: ReportExtras = {
+        joints,
+        transport,
+        ceilings: project.ceilings,
+        openings: extracted?.openings,
+        specialFeatures: extracted?.specialFeatures,
+        planQuality: extracted?.planQuality,
+      };
+
       downloadReport(project, calcResults as never, costs, {
         laymanMode, includeFormulas: !laymanMode, includeAuditTrail: includeAudit, includeCosts,
-      });
+      }, extras);
       toast({ title: 'PDF erstellt', description: 'Bericht wurde heruntergeladen.' });
     } catch (e) {
       toast({ title: 'PDF-Fehler', description: e instanceof Error ? e.message : 'Unbekannt', variant: 'destructive' });

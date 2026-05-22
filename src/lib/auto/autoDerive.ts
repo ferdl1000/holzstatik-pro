@@ -3,10 +3,14 @@
  *
  * Füllt fehlende oder ungültige Geometriewerte aus dem Vorhandenen auf,
  * sodass die Folge-Pipeline ohne User-Eingabe funktioniert.
+ *
+ * Schritt 0: sanitizeGeometry() — bereinigt NaN/negative/fehlende Werte
+ * Schritt 1: autoDeriveGeometry() — berechnet abgeleitete Größen (Neigung↔First)
  */
 
 import type { BuildingGeometry, NumberWithConfidence, RoofType } from '@/types/project';
 import type { AutoAssumption, DerivedGeometry } from '@/lib/auto/contracts';
+import { sanitizeGeometry } from '@/lib/auto/sanitize';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Hilfsfunktionen
@@ -22,7 +26,7 @@ function nwc(
 }
 
 function isValid(n: NumberWithConfidence | undefined): boolean {
-  return n !== undefined && n.value > 0;
+  return n !== undefined && Number.isFinite(n.value) && n.value > 0;
 }
 
 function degToRad(deg: number): number {
@@ -41,77 +45,24 @@ export function autoDeriveGeometry(
   geometry: BuildingGeometry | undefined,
   _roofType?: RoofType,
 ): DerivedGeometry {
-  const assumptions: AutoAssumption[] = [];
+  // ── Schritt 0: Sanitize (NaN, negative, fehlende Werte, Tausch First/Traufe) ──
+  const sanitized = sanitizeGeometry(geometry);
+  const assumptions: AutoAssumption[] = [...sanitized.assumptions];
 
-  // ── Vollständige Fallback-Geometrie ──────────────────────────────────────
-  if (!geometry) {
-    assumptions.push({
-      field: 'geometry',
-      value: 'Satteldach 30°, 8 m × 12 m, Traufe 4.5 m',
-      reason: 'Keine Geometrie aus Planextraktion vorhanden — vollständiger Default verwendet.',
-      source: 'fallback',
-    });
+  // Nach sanitize ist geometry immer vollständig befüllt
+  const sanitizedGeom = sanitized.geometry;
 
-    const defaultRidgeHeight = 4.5 + Math.tan(degToRad(30)) * (8 / 2); // ≈ 6.81 m
-    const derived: BuildingGeometry = {
-      length: nwc(12.0, 'm', 'assumed', 0.3),
-      width: nwc(8.0, 'm', 'assumed', 0.3),
-      ridgeHeight: nwc(defaultRidgeHeight, 'm', 'assumed', 0.3),
-      eavesHeight: nwc(4.5, 'm', 'assumed', 0.3),
-      roofPitch: nwc(30, '°', 'assumed', 0.3),
-      spans: [],
-      axes: [],
-      isSymmetric: true,
-      confidence: 0.3,
-      userConfirmed: false,
-    };
-    return { geometry: derived, assumptions };
-  }
-
-  // ── Tiefe Kopie der Eingabe ──────────────────────────────────────────────
+  // ── Tiefe Kopie der bereinigten Eingabe ─────────────────────────────────
   const g: BuildingGeometry = {
-    ...geometry,
-    length: { ...geometry.length },
-    width: { ...geometry.width },
-    ridgeHeight: { ...geometry.ridgeHeight },
-    eavesHeight: { ...geometry.eavesHeight },
-    roofPitch: { ...geometry.roofPitch },
-    spans: [...(geometry.spans ?? [])],
-    axes: [...(geometry.axes ?? [])],
+    ...sanitizedGeom,
+    length:      { ...sanitizedGeom.length },
+    width:       { ...sanitizedGeom.width },
+    ridgeHeight: { ...sanitizedGeom.ridgeHeight },
+    eavesHeight: { ...sanitizedGeom.eavesHeight },
+    roofPitch:   { ...sanitizedGeom.roofPitch },
+    spans: [...(sanitizedGeom.spans ?? [])],
+    axes:  [...(sanitizedGeom.axes  ?? [])],
   };
-
-  // ── Traufe (eavesHeight) ─────────────────────────────────────────────────
-  if (!isValid(g.eavesHeight)) {
-    g.eavesHeight = nwc(3.0, 'm', 'assumed', 0.5);
-    assumptions.push({
-      field: 'eavesHeight',
-      value: 3.0,
-      reason: 'Traufhöhe fehlt — Standard-Geschosshöhe 3.0 m angenommen.',
-      source: 'default',
-    });
-  }
-
-  // ── Breite (width) ───────────────────────────────────────────────────────
-  if (!isValid(g.width)) {
-    g.width = nwc(8.0, 'm', 'assumed', 0.4);
-    assumptions.push({
-      field: 'width',
-      value: 8.0,
-      reason: 'Gebäudebreite fehlt — Standardbreite 8.0 m angenommen.',
-      source: 'default',
-    });
-  }
-
-  // ── Länge (length) ───────────────────────────────────────────────────────
-  if (!isValid(g.length)) {
-    g.length = nwc(12.0, 'm', 'assumed', 0.4);
-    assumptions.push({
-      field: 'length',
-      value: 12.0,
-      reason: 'Gebäudelänge fehlt — Standardlänge 12.0 m angenommen.',
-      source: 'default',
-    });
-  }
 
   const halfWidth = g.width.value / 2;
   const eaves = g.eavesHeight.value;

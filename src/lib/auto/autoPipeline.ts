@@ -13,6 +13,7 @@ import { autoGenerateMembers } from './autoMembers';
 import { autoComputeLoads } from './autoLoads';
 import { autoCalculateAllMembers } from './autoCalculate';
 import { autoComputeCosts } from './autoCost';
+import { sanitizeRoofForm, sanitizeStructuralSystemType } from './sanitize';
 
 // ── Helper: Wähle ein sinnvolles Tragsystem basierend auf Dachteil-Geometrie ──
 function defaultStructuralSystemForPart(rp: RoofPart): StructuralSystem {
@@ -66,39 +67,63 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const ceilings = input.ceilings ?? project.ceilings;
 
   // ── 1. Geometrie ableiten ────────────────────────────────────────────────
-  const roofTypeRaw = project.roofType ?? {
-    form: 'satteldach' as const,
-    confidence: 0.5,
-    alternatives: [],
-    userConfirmed: false,
-  };
+
+  // Sanitize RoofType (ungültiger/fehlender form-Wert → satteldach)
+  const structuralSystemAssumptions: AutoAssumption[] = [];
+  const roofFormSanitized = sanitizeRoofForm(project.roofType?.form);
+  if (roofFormSanitized.assumption) structuralSystemAssumptions.push(roofFormSanitized.assumption);
+
+  const roofTypeRaw: RoofType = project.roofType
+    ? { ...project.roofType, form: roofFormSanitized.form }
+    : {
+        form: roofFormSanitized.form,
+        confidence: 0.5,
+        alternatives: [],
+        userConfirmed: false,
+      };
+
+  if (!project.roofType) {
+    structuralSystemAssumptions.push({
+      field: 'roofType',
+      value: roofFormSanitized.form,
+      reason: 'Kein Dachtyp aus Plan erkannt – Satteldach als häufigste Bauform angenommen.',
+      source: 'default',
+    });
+  }
 
   const derivedGeometry = autoDeriveGeometry(project.geometry, roofTypeRaw);
 
-  // ── 2. Tragsystem mit Defaults ───────────────────────────────────────────
-  const structuralSystemRaw = project.structuralSystem ?? {
-    type: 'pfettendach_mittelpfette' as const,
-    confidence: 0.5,
-    reasoning: 'Default-Annahme: Pfettendach mit Mittelpfette',
-    alternatives: [],
-    userConfirmed: false,
-  };
+  // ── 2. Tragsystem mit Defaults + Sanitize ───────────────────────────────
+  const sysSanitized = sanitizeStructuralSystemType(project.structuralSystem?.type);
+  if (sysSanitized.assumption) structuralSystemAssumptions.push(sysSanitized.assumption);
 
-  const structuralSystemAssumptions: AutoAssumption[] = [];
+  const structuralSystemRaw: StructuralSystem = project.structuralSystem
+    ? { ...project.structuralSystem, type: sysSanitized.type }
+    : {
+        type: sysSanitized.type,
+        confidence: 0.5,
+        reasoning: 'Default-Annahme: Pfettendach mit Mittelpfette',
+        alternatives: [],
+        userConfirmed: false,
+      };
+
   if (!project.structuralSystem) {
     structuralSystemAssumptions.push({
       field: 'structuralSystem',
-      value: 'pfettendach_mittelpfette',
+      value: sysSanitized.type,
       reason: 'Kein Tragsystem aus Plan erkannt – Standard-Pfettendach mit Mittelpfette angenommen.',
       source: 'default',
     });
   }
-  if (!project.roofType) {
-    structuralSystemAssumptions.push({
-      field: 'roofType',
-      value: 'satteldach',
-      reason: 'Kein Dachtyp aus Plan erkannt – Satteldach als häufigste Bauform angenommen.',
-      source: 'default',
+
+  // ── 2b. Adresse: Wien als Fallback wenn komplett fehlend ─────────────────
+  const addressAssumptions: AutoAssumption[] = [];
+  if (!project.address) {
+    addressAssumptions.push({
+      field: 'address',
+      value: '1010 Wien',
+      reason: 'Keine Adresse im Plan gefunden — Wien (1010) als Fallback für Lastermittlung verwendet.',
+      source: 'fallback',
     });
   }
 
@@ -160,7 +185,19 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   }
 
   // ── 4. Lasten ermitteln ──────────────────────────────────────────────────
-  const loadsResult = await autoComputeLoads(project.address, derivedGeometry.geometry, roofTypeRaw.form);
+  // Adresse mit Wien-Fallback (1010) wenn komplett fehlend
+  const addressForLoads = project.address ?? {
+    street: '',
+    houseNumber: '',
+    postalCode: '1010',
+    city: 'Wien',
+    state: 'Wien',
+    country: 'Österreich',
+    confidence: 0.2,
+    source: 'auto_extracted' as const,
+    alternatives: [],
+  };
+  const loadsResult = await autoComputeLoads(addressForLoads, derivedGeometry.geometry, roofTypeRaw.form);
 
   // g_k: Summe aller permanenten Lastfälle
   const g_k = loadsResult.loadCases
@@ -192,6 +229,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const allAssumptions: AutoAssumption[] = [
     ...derivedGeometry.assumptions,
     ...structuralSystemAssumptions,
+    ...addressAssumptions,
     ...membersResult.assumptions,
     ...loadsResult.assumptions,
     ...calculationsResult.assumptions,
