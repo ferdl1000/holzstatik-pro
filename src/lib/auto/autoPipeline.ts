@@ -197,7 +197,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     source: 'auto_extracted' as const,
     alternatives: [],
   };
-  const loadsResult = await autoComputeLoads(addressForLoads, derivedGeometry.geometry, roofTypeRaw.form);
+  const loadsResult = await autoComputeLoads(addressForLoads, derivedGeometry.geometry, roofTypeRaw.form, project.coveringType);
 
   // g_k: Summe aller permanenten Lastfälle
   const g_k = loadsResult.loadCases
@@ -223,6 +223,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     roofForm: project.roofType?.form ?? 'satteldach',
     includeDeckPlanks: true,
     includeTransport: true,
+    ...(project.coveringType ? { coveringType: project.coveringType } : {}),
   });
 
   // ── 7. Alle Annahmen zusammenfassen ──────────────────────────────────────

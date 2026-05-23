@@ -1,5 +1,6 @@
 import { Roof3D } from './Roof3D';
 import { AbbundOverview } from './AbbundDetails';
+import { SchnittViews } from './SchnittViews';
 import type { Project } from '@/types/project';
 import { legacyToRoofPart } from '@/types/roofParts';
 import type { RoofPart } from '@/types/roofParts';
@@ -62,6 +63,14 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
         utilizations={utilizations}
       />
       <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} />
+      <div className="mt-4">
+        <SchnittViews
+          geometry={g}
+          roofForm={project.roofType?.form ?? 'satteldach'}
+          members={project.members ?? []}
+          coveringName={project.coveringType?.type}
+        />
+      </div>
     </div>
   );
 }

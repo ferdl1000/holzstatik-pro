@@ -8,7 +8,7 @@
  *  - byRoofPart:   (optional) Aufschlüsselung pro Dachteil wenn opts.roofParts übergeben
  */
 
-import type { TimberMember, BuildingGeometry } from '@/types/project';
+import type { TimberMember, BuildingGeometry, RoofCovering } from '@/types/project';
 import type { RoofPart } from '@/types/roofParts';
 import type { AutoCostResult, OrderListItem } from './contracts';
 import type { CostEstimate, CostPosition } from '@/lib/pricing';
@@ -17,8 +17,29 @@ import { suggestDeckPlanks, computeTransportPlan } from '@/lib/auto/standards';
 import { estimateCost } from '@/lib/pricing/estimator';
 import { DEFAULT_FACTORS } from '@/lib/pricing/database';
 
+/** Mappe RoofCovering.type auf Preislisten-coveringId */
+function coveringTypeToCoveringId(type: RoofCovering['type']): string {
+  const map: Record<RoofCovering['type'], string> = {
+    tile_clay:       'tile_clay',
+    tile_concrete:   'tile_concrete',
+    metal_falz:      'metal_falz',
+    trapezblech:     'trapezblech',
+    schiefer:        'schiefer',
+    sandwich_paneel: 'sandwich_paneel',
+    gruendach_ext:   'gruendach_ext',
+    gruendach_int:   'gruendach_int',
+    pv:              'tile_clay', // PV ist Zusatz, Basiseindeckung Standard
+    bitumen:         'bitumen',
+    sonstiges:       'tile_clay',
+    unbekannt:       'tile_clay',
+  };
+  return map[type] ?? 'tile_clay';
+}
+
 interface AutoCostOptions {
   coveringId?: string;
+  /** Erkannte Eindeckung aus KI-Extraktion (überschreibt coveringId wenn vorhanden) */
+  coveringType?: RoofCovering;
   insulationId?: string;
   roofParts?: RoofPart[];
   /** Zimmerei-Modus (default): nur Holz + Verbinder + Lohn. Keine Eindeckung/Dämmung/Folien. */
@@ -341,7 +362,9 @@ export function autoComputeCosts(
   geometry: BuildingGeometry,
   opts?: AutoCostOptions,
 ): AutoCostResultExt {
-  const coveringId = opts?.coveringId ?? 'tile_clay';
+  const coveringId = opts?.coveringType
+    ? coveringTypeToCoveringId(opts.coveringType.type)
+    : (opts?.coveringId ?? 'tile_clay');
   const insulationId = opts?.insulationId ?? 'ins_mw_200';
   const roofParts = opts?.roofParts;
   const zimmereiOnly = opts?.zimmereiOnly ?? true;  // Default: Zimmerei-Modus

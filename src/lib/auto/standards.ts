@@ -87,16 +87,28 @@ export function nextLargerProfile(
 
 // ─── Stoßstellen-Logik ─────────────────────────────────────────────────────────
 
+export type JointType =
+  | 'Stoß bei Momentennulldurchgang'
+  | 'Lasche'
+  | 'Schräger Schnitt mit Bolzen'
+  | 'Stoß über Stütze'   // @deprecated: nur bei kurzen Pfetten <6 m oder mit explizitem Hinweis
+  | 'Zapfenstoß'
+  | 'Hakenblatt';
+
 export interface JointSpec {
   position: number;     // m vom Anfang
-  type: 'Stoß über Stütze' | 'Zapfenstoß' | 'Hakenblatt' | 'Schräger Schnitt mit Bolzen' | 'Lasche';
+  type: JointType;
   notes: string;
   extraCost: number;    // EUR pauschal pro Stoß
 }
 
 /**
  * Berechnet Stoßstellen für einen langen Träger.
- * Stoßt bevorzugt über Stützen (wenn pos bekannt), sonst gleichmäßig verteilt.
+ *
+ * Statisch korrekte Positionierung:
+ * - Stoß IMMER am Momentennulldurchgang (M ≈ 0), NIE über der Stütze.
+ * - Durchlaufträger: M=0 bei ca. 0,21 × Feldweite vom Innenauflager.
+ * - Ohne Stützen: gleichmäßig mit Moment-tragender Lasche (M ≠ 0 im Feld!).
  */
 export function computeJoints(
   member: TimberMember,
@@ -107,37 +119,70 @@ export function computeJoints(
 
   const nSegments = Math.ceil(member.length / rule.maxLength);
   const nJoints = nSegments - 1;
-
   const joints: JointSpec[] = [];
 
-  // Wenn Stützenpositionen vorhanden: möglichst über Stützen stoßen
-  if (supportPositions && supportPositions.length > 0) {
-    const sorted = [...supportPositions].sort((a, b) => a - b);
-    const idealSpacing = member.length / nSegments;
-    for (let i = 1; i <= nJoints; i++) {
-      const idealPos = i * idealSpacing;
-      // nächste Stützenposition
-      const closestSupport = sorted.reduce((prev, curr) =>
-        Math.abs(curr - idealPos) < Math.abs(prev - idealPos) ? curr : prev,
-      );
-      joints.push({
-        position: closestSupport,
-        type: 'Stoß über Stütze',
-        notes: `Stoß bei ${closestSupport.toFixed(2)} m (über Stütze). Aufgekämmt + 2 Bolzen M12, Stoßlasche aufgenagelt.`,
-        extraCost: 45,
-      });
-    }
-  } else {
-    // Gleichmäßig verteilt
+  // Stützen sortiert (nur Innen-Stützen, nicht End-Auflager)
+  const sorted = (supportPositions || []).slice().sort((a, b) => a - b);
+
+  if (sorted.length === 0) {
+    // Keine Stützen → gleichmäßig verteilt, ABER Moment-tragende Lasche zwingend
     const spacing = member.length / nSegments;
     for (let i = 1; i <= nJoints; i++) {
       joints.push({
         position: i * spacing,
         type: member.material?.includes('GL') ? 'Lasche' : 'Schräger Schnitt mit Bolzen',
-        notes: `Stoß bei ${(i * spacing).toFixed(2)} m. ${member.material?.includes('GL') ? 'Stoßlasche Stahl beidseitig, 4×M16 vorgespannt.' : 'Schräge Schäftung 1:8 mit 2 Bolzen M12.'}`,
-        extraCost: member.material?.includes('GL') ? 320 : 65,
+        notes: `Gelenkstoß bei ${(i * spacing).toFixed(2)} m. Achtung: ohne Stütze in der Nähe, Moment-tragende Lasche zwingend erforderlich.`,
+        extraCost: member.material?.includes('GL') ? 380 : 85,
       });
     }
+    return joints;
+  }
+
+  // Mit Stützen: am M=0-Punkt stoßen (0,21 × Feldweite vom Innenauflager)
+  const innerSupports = sorted.filter(s => s > 0.1 && s < member.length - 0.1);
+
+  for (let i = 1; i <= nJoints; i++) {
+    const idealPos = i * (member.length / nSegments);
+
+    if (innerSupports.length === 0) {
+      // Nur End-Auflager vorhanden → gleichmäßig mit Lasche
+      joints.push({
+        position: idealPos,
+        type: 'Lasche',
+        notes: `Stoß bei ${idealPos.toFixed(2)} m mit Moment-tragender Stoßlasche (keine Innenstütze vorhanden).`,
+        extraCost: 220,
+      });
+      continue;
+    }
+
+    // Nächste Innenstütze zur idealen Position
+    const closestSupport = innerSupports.reduce((prev, curr) =>
+      Math.abs(curr - idealPos) < Math.abs(prev - idealPos) ? curr : prev,
+    );
+
+    const supportIdx = innerSupports.indexOf(closestSupport);
+    const prevSup = supportIdx > 0 ? innerSupports[supportIdx - 1] : 0;
+    const nextSup = supportIdx < innerSupports.length - 1 ? innerSupports[supportIdx + 1] : member.length;
+
+    // Feldweite links und rechts der nächsten Innenstütze
+    const fieldLeft = closestSupport - prevSup;
+    const fieldRight = nextSup - closestSupport;
+
+    // M=0-Punkt bei ~0,21 × Feldweite vom Innenauflager weg (Durchlaufträger)
+    const offsetFromSupport = 0.21 * Math.min(fieldLeft, fieldRight);
+
+    // Auf der Seite die näher am ideal-Punkt liegt stoßen
+    const stossPos = idealPos < closestSupport
+      ? closestSupport - offsetFromSupport
+      : closestSupport + offsetFromSupport;
+
+    joints.push({
+      position: stossPos,
+      type: 'Stoß bei Momentennulldurchgang',
+      notes: `Stoß bei ${stossPos.toFixed(2)} m = 0,21 × ${Math.min(fieldLeft, fieldRight).toFixed(2)} m vom Innenauflager (M ≈ 0). ` +
+             `Gerader Stoß mit Stoßlasche, 2 Bolzen M12 pro Seite.`,
+      extraCost: 95,
+    });
   }
 
   return joints;

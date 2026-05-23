@@ -225,6 +225,28 @@ function buildBauteileSection(
   return lines.join('\n');
 }
 
+function buildAussenwaeendeSection(project: Project, opts: Required<StatikCSVOptions>): string {
+  const s   = opts.separator;
+  const geo = project.geometry;
+
+  const len  = geo?.length.value      ?? 10;
+  const wid  = geo?.width.value       ?? 8;
+  const h    = geo?.eavesHeight.value ?? 4;
+  const t    = 0.25;  // Wanddicke Standard Mauerwerk
+  const uVal = 0.35;  // Ziegelmauerwerk 25cm U-Wert W/m²K (Richtwert ÖNORM B 8110)
+
+  const lines: string[] = [
+    '### AUSSENWAENDE ###',
+    row(['Wand_ID', 'Position', 'Laenge_m', 'Hoehe_m', 'Dicke_m', 'Material', 'UWert_W_m2K'], s),
+    row(['wall_front',  'Traufseite_Vorne',  d(len, opts), d(h, opts), d(t, opts), 'Mauerwerk', d(uVal, opts)], s),
+    row(['wall_back',   'Traufseite_Hinten', d(len, opts), d(h, opts), d(t, opts), 'Mauerwerk', d(uVal, opts)], s),
+    row(['wall_left',   'Giebelwand_Links',  d(wid, opts), d(h, opts), d(t, opts), 'Mauerwerk', d(uVal, opts)], s),
+    row(['wall_right',  'Giebelwand_Rechts', d(wid, opts), d(h, opts), d(t, opts), 'Mauerwerk', d(uVal, opts)], s),
+    '',
+  ];
+  return lines.join('\n');
+}
+
 function buildStoesseSection(members: TimberMember[], opts: Required<StatikCSVOptions>): string {
   const s = opts.separator;
   const lines: string[] = [
@@ -288,6 +310,7 @@ export function exportStatikCSV(
     buildLastenSection(loadCases, o),
     buildBauteileSection(members, loadCases, o),
     buildStoesseSection(members, o),
+    buildAussenwaeendeSection(project, o),
   ].join('\n');
 
   // UTF-8 BOM für Excel-Direktöffnung

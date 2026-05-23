@@ -1,5 +1,13 @@
 import type { RoofPart } from './roofParts';
 
+// ===== Roof Covering =====
+export interface RoofCovering {
+  type: 'tile_clay' | 'tile_concrete' | 'metal_falz' | 'trapezblech' | 'schiefer' | 'sandwich_paneel' | 'gruendach_ext' | 'gruendach_int' | 'pv' | 'bitumen' | 'sonstiges' | 'unbekannt';
+  weight_kN_m2: number;
+  evidence?: string;
+  confidence: number;
+}
+
 // ===== Status & Confidence Types =====
 export type StatusLevel = 'green' | 'yellow' | 'red';
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
@@ -49,6 +57,8 @@ export interface Project {
   roofParts?: RoofPart[];
   /** Erkannte Zwischendecken / Holzbalkendecken */
   ceilings?: CeilingArea[];
+  /** Erkannte Eindeckung mit Eigengewicht */
+  coveringType?: RoofCovering;
 }
 
 // ===== Documents =====

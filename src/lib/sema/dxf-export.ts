@@ -18,6 +18,8 @@ interface LayerDef { name: string; color: number; }
 
 /** SEMA-konformes Layer-System mit AutoCAD-Standardfarben. */
 const SEMA_LAYERS: Record<string, LayerDef> = {
+  schnitt_aa:   { name: 'SCHNITT_A_A',          color: 3  },  // grün
+  schnitt_bb:   { name: 'SCHNITT_B_B',          color: 5  },  // blau
   sparren:      { name: '100_SPARREN',         color: 1  },  // rot
   nebentraeger: { name: '101_NEBENTRAEGER',     color: 1  },  // rot
   pfette_first: { name: '200_PFETTEN_FIRST',    color: 3  },  // grün
@@ -53,8 +55,8 @@ function getAllUsedLayers(members: TimberMember[]): LayerDef[] {
     const lyr = getLayerForType(m.type, m.name);
     if (!seen.has(lyr.name)) seen.set(lyr.name, lyr);
   }
-  // Always include wall + floor + dimension layers
-  for (const key of ['wand', 'boden', 'bemassung']) {
+  // Always include wall + floor + dimension + section layers
+  for (const key of ['wand', 'boden', 'bemassung', 'schnitt_aa', 'schnitt_bb']) {
     const lyr = SEMA_LAYERS[key];
     if (!seen.has(lyr.name)) seen.set(lyr.name, lyr);
   }
@@ -400,6 +402,93 @@ function buildDimLines(
   return out;
 }
 
+// ─── Schnittlinien ────────────────────────────────────────────────────────────
+
+/**
+ * Schnittlinie A-A: Querschnitt senkrecht zur Firstrichtung (durch Gebäudemitte).
+ * Schnittlinie B-B: Längsschnitt parallel zum First (durch Gebäudemitte).
+ * Jede Schnittlinie: eine LWPOLYLINE + zwei TEXT-Beschriftungen.
+ */
+function buildSchnittLines(length: number, width: number): string {
+  const lyrAA = SEMA_LAYERS.schnitt_aa;
+  const lyrBB = SEMA_LAYERS.schnitt_bb;
+  const ext   = 2.0;   // Überstand über Gebäude
+  const tOff  = 0.5;   // Text-Abstand zur Linie
+
+  let out = '';
+
+  // Schnitt A-A: Linie in X-Richtung, bei Z = width/2 + ext (über Grundriss)
+  const aaZ = -(width / 2 + ext);
+  out += g(0, 'LINE') + g(8, lyrAA.name) + g(62, lyrAA.color) +
+    g(10, (-length / 2 - ext).toFixed(4)) + g(20, '0.0000') + g(30, aaZ.toFixed(4)) +
+    g(11, ( length / 2 + ext).toFixed(4)) + g(21, '0.0000') + g(31, aaZ.toFixed(4));
+  // Beschriftung links
+  out += g(0, 'TEXT') + g(8, lyrAA.name) + g(62, lyrAA.color) +
+    g(10, (-length / 2 - ext).toFixed(4)) + g(20, '0.0000') + g(30, (aaZ - tOff).toFixed(4)) +
+    g(40, '0.3') + g(1, 'A');
+  // Beschriftung rechts
+  out += g(0, 'TEXT') + g(8, lyrAA.name) + g(62, lyrAA.color) +
+    g(10, ( length / 2 + ext).toFixed(4)) + g(20, '0.0000') + g(30, (aaZ - tOff).toFixed(4)) +
+    g(40, '0.3') + g(1, 'A');
+
+  // Schnitt B-B: Linie in Z-Richtung, bei X = -(length/2 + ext) (links vom Gebäude)
+  const bbX = -(length / 2 + ext);
+  out += g(0, 'LINE') + g(8, lyrBB.name) + g(62, lyrBB.color) +
+    g(10, bbX.toFixed(4)) + g(20, '0.0000') + g(30, (-width / 2 - ext).toFixed(4)) +
+    g(11, bbX.toFixed(4)) + g(21, '0.0000') + g(31, ( width / 2 + ext).toFixed(4));
+  // Beschriftung unten
+  out += g(0, 'TEXT') + g(8, lyrBB.name) + g(62, lyrBB.color) +
+    g(10, (bbX - tOff).toFixed(4)) + g(20, '0.0000') + g(30, (-width / 2 - ext).toFixed(4)) +
+    g(40, '0.3') + g(1, 'B');
+  // Beschriftung oben
+  out += g(0, 'TEXT') + g(8, lyrBB.name) + g(62, lyrBB.color) +
+    g(10, (bbX - tOff).toFixed(4)) + g(20, '0.0000') + g(30, ( width / 2 + ext).toFixed(4)) +
+    g(40, '0.3') + g(1, 'B');
+
+  return out;
+}
+
+// ─── Wand-Außenmaße ───────────────────────────────────────────────────────────
+
+/**
+ * Legt je eine Bemaßungslinie pro Außenwand (Länge + Breite) an,
+ * plus TEXT-Beschriftung mit dem Maßwert.
+ */
+function buildWallDimLines(length: number, width: number, eavesHeight: number): string {
+  const lyr    = SEMA_LAYERS.bemassung;
+  const offset = 2.5;  // Abstand der Bemaßungslinie vom Gebäude
+  let out = '';
+
+  // Länge (X-Richtung) – Vorderkante
+  const zFront = -(width / 2 + offset);
+  out += g(0, 'LINE') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, (-length / 2).toFixed(4)) + g(20, '0.0000') + g(30, zFront.toFixed(4)) +
+    g(11, ( length / 2).toFixed(4)) + g(21, '0.0000') + g(31, zFront.toFixed(4));
+  out += g(0, 'TEXT') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, '0.0000') + g(20, '0.0000') + g(30, (zFront - 0.4).toFixed(4)) +
+    g(40, '0.3') + g(72, 1) + g(1, `L=${length.toFixed(2)}m`);
+
+  // Breite (Z-Richtung) – rechte Seite
+  const xRight = length / 2 + offset;
+  out += g(0, 'LINE') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, xRight.toFixed(4)) + g(20, '0.0000') + g(30, (-width / 2).toFixed(4)) +
+    g(11, xRight.toFixed(4)) + g(21, '0.0000') + g(31, ( width / 2).toFixed(4));
+  out += g(0, 'TEXT') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, (xRight + 0.4).toFixed(4)) + g(20, '0.0000') + g(30, '0.0000') +
+    g(40, '0.3') + g(72, 1) + g(1, `B=${width.toFixed(2)}m`);
+
+  // Traufhöhe (vertikal links)
+  const xLeft = -(length / 2 + offset);
+  out += g(0, 'LINE') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, xLeft.toFixed(4)) + g(20, '0.0000') + g(30, (-width / 2).toFixed(4)) +
+    g(11, xLeft.toFixed(4)) + g(21, eavesHeight.toFixed(4)) + g(31, (-width / 2).toFixed(4));
+  out += g(0, 'TEXT') + g(8, lyr.name) + g(62, lyr.color) +
+    g(10, (xLeft - 0.4).toFixed(4)) + g(20, (eavesHeight / 2).toFixed(4)) + g(30, (-width / 2).toFixed(4)) +
+    g(40, '0.3') + g(72, 1) + g(1, `H=${eavesHeight.toFixed(2)}m`);
+
+  return out;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -431,8 +520,12 @@ export function exportToDXF(project: Project, members: TimberMember[]): string {
     entities += boxFaces(s.cx, s.cy, s.cz, s.sx, s.sy, s.sz, s.rx, s.ry, s.rz, s.layer.name, s.layer.color);
   }
 
-  // Bemaßungslinien
+  // Bemaßungslinien (Höhen + Standard)
   entities += buildDimLines(length, width, ridgeHeight, eavesHeight);
+  // Wand-Außenmaße
+  entities += buildWallDimLines(length, width, eavesHeight);
+  // Schnittlinien A-A und B-B
+  entities += buildSchnittLines(length, width);
 
   const entitiesSection =
     g(0, 'SECTION') +

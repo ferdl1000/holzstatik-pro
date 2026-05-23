@@ -48,7 +48,7 @@ serve(async (req) => {
     function mergeExtracted(base: Record<string, any>, overlay: Record<string, any>): Record<string, any> {
       const merged: Record<string, any> = { ...base };
       // Skalare Felder
-      for (const key of ['overallConfidence', 'roofHints', 'structureHints', 'planQuality']) {
+      for (const key of ['overallConfidence', 'roofHints', 'structureHints', 'planQuality', 'covering']) {
         const bConf = (base[key] as any)?.confidence ?? base.overallConfidence ?? 0;
         const oConf = (overlay[key] as any)?.confidence ?? overlay.overallConfidence ?? 0;
         if (oConf > bConf) merged[key] = overlay[key];
@@ -339,6 +339,29 @@ serve(async (req) => {
       log.push(`✓ Ceilings: ${projectUpdate.ceilings.length} Holzbalkendecke(n) erkannt (${projectUpdate.ceilings.map((c: any) => c.level).join(', ')})`);
     } else {
       log.push('ℹ Ceilings: Keine Holzbalkendecken erkannt');
+    }
+
+    // covering: Eindeckungstyp + Eigengewicht durchreichen
+    const extractedCovering = extracted.covering as any | undefined;
+    if (extractedCovering && extractedCovering.type && extractedCovering.type !== 'unbekannt') {
+      projectUpdate.coveringType = {
+        type: extractedCovering.type,
+        weight_kN_m2: extractedCovering.weight_kN_m2 ?? 0.55,
+        evidence: extractedCovering.evidence ?? undefined,
+        confidence: extractedCovering.confidence ?? 0.5,
+      };
+      log.push(`✓ Eindeckung erkannt: ${extractedCovering.type} (${(extractedCovering.weight_kN_m2 ?? 0.55).toFixed(2)} kN/m², Konfidenz ${((extractedCovering.confidence ?? 0.5) * 100).toFixed(0)}%)`);
+      await supabase.from('audit_log').insert({
+        project_id: projectId,
+        agent: 'Dokumenten-Agent',
+        action: `Eindeckung erkannt: ${extractedCovering.type} (${(extractedCovering.weight_kN_m2 ?? 0.55).toFixed(2)} kN/m²)`,
+        field: 'coveringType',
+        reason: extractedCovering.evidence ?? 'KI-Extraktion',
+        new_value: JSON.stringify(projectUpdate.coveringType),
+        user_initiated: false,
+      });
+    } else {
+      log.push(`ℹ Eindeckung: ${extractedCovering?.type === 'unbekannt' ? 'Typ unbekannt – Default tile_clay wird angenommen' : 'Kein Eindeckungstyp erkannt'}`);
     }
 
     await supabase.from('projects')

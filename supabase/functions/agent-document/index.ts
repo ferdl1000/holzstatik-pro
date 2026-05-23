@@ -74,6 +74,13 @@ Wenn ein Plan sowohl Bestand als auch Zubau/Erweiterung zeigt:
 - Einfach extrahieren was beschriftet ist (Süd-Ansicht, Ost-Ansicht, etc.).
 - ridgeDirection nur aus expliziter Beschriftung oder eindeutiger Geometrie ableiten, sonst "unbekannt".
 
+=== SPARRENRICHTUNG (structureHints) ===
+- Erkenne EINDEUTIG die Sparrenrichtung: parallel zur Längsseite (ridgeDirection="x") oder zur Querseite (ridgeDirection="y") des Gebäudes.
+- Im Grundriss: Sparrenlinien oder Pfeil-Symbole für Sparrenrichtung beachten.
+- Im Schnitt: Sparren als diagonale Linien → deren Verlauf bestimmt die Richtung.
+- Trage in structureHints.reasoning explizit ein ob Sparrenrichtung aus Grundriss, Schnitt oder Ansicht abgeleitet wurde.
+- Wenn nicht eindeutig: structureHints.confidence ≤ 0.5 und Warnung in planQuality.warnings.
+
 === GEOMETRISCH UNVOLLSTÄNDIGE PLÄNE ===
 Wenn Dachneigung NICHT angegeben aber First- und Traufhöhe + Dachbreite vorhanden:
 - Berechne: Neigung = arctan((Firsthöhe - Traufhöhe) / (Dachbreite / 2)) in Grad.
@@ -115,12 +122,42 @@ Erkenne auch ungewöhnliche Dachformen:
 - Zollinger-Dach → form="sonderfall", notes="Zollinger-Dach".
 - Wenn keine passende Kategorie: form="sonderfall", notes mit konkreter Beschreibung.
 
+=== AUFBAUTEN / EINDECKUNG ===
+Suche AKTIV nach Hinweisen auf Eindeckungstyp:
+- LEGENDE / Aufbauten-Liste (z.B. "B1: Ziegel ... B2: ...")
+- Beschriftung am Plan ("Tondachziegel", "Stehfalz", "Trapezblech", "Sandwichpaneel")
+- Im Schnitt sichtbarer Aufbau (Ziegel = wellig, Blech = gerade Linien, Sandwich = dicke einheitliche Schicht)
+- Bei Industriebauten/Hallen: meist Trapezblech oder Sandwich
+- Bei Wohnbau (Satteldach/Walm): meist Ziegel
+- Bei modernen Gebäuden mit Stehfalz/Flachdach: Blech oder Bitumen
+- Bei Pultdach niedrig (<5°): meist Blech oder Bitumen
+
+Gewichts-Tabelle (Standardwerte, nur Annahme wenn nicht klar):
+- tile_clay (Tondachziegel): 0.55 kN/m² (inkl. Lattung)
+- tile_concrete (Betondachstein): 0.55
+- metal_falz (Stehfalzblech): 0.12
+- trapezblech: 0.10
+- schiefer (Naturschiefer): 0.55
+- sandwich_paneel: 0.18
+- gruendach_ext: 1.0
+- gruendach_int: 2.5
+- pv (zusätzlich): 0.20
+- bitumen: 0.30
+
+WENN UNKLAR: covering.type='unbekannt', confidence niedrig setzen, weight_kN_m2=0.55 als Default.
+
 === JSON-SCHEMA ===
 {
   "texts": [{ "content": "...", "category": "address|dimension|label|note|title|other", "confidence": 0.0..1.0 }],
   "dimensions": [{ "value": 12.5, "unit": "m", "label": "Gebäudelänge|Gebäudebreite|Firsthöhe|Traufhöhe|Dachneigung|Dachneigung_berechnet|Spannweite", "confidence": 0..1 }],
   "addresses": [{ "fullAddress": "...", "context": "z.B. 'Bauvorhaben'", "isBuildingAddress": true|false, "confidence": 0..1, "excludeReason": "z.B. Planerbüro" }],
   "roofHints": { "form": "satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform|sheddach|tonnendach|mansardendach|sonderfall", "pitch": 35, "confidence": 0..1, "ridgeDirection": "Nord-Süd|Ost-West|unbekannt" },
+  "covering": {
+    "type": "tile_clay|tile_concrete|metal_falz|trapezblech|schiefer|sandwich_paneel|gruendach_ext|gruendach_int|pv|bitumen|sonstiges|unbekannt",
+    "weight_kN_m2": 0.55,
+    "evidence": "z.B. 'Tondachziegel laut Legende B2' oder 'Stehfalzblech laut Beschriftung Schnitt'",
+    "confidence": 0.0
+  },
   "structureHints": {
     "type": "sparrendach|kehlbalkendach|pfettendach|leimbinder_haupttraeger|sonderfall",
     "reasoning": "...",
@@ -146,7 +183,8 @@ Erkenne auch ungewöhnliche Dachformen:
       "pitch": 22,
       "ridgeDirection": "x|y",
       "confidence": 0.9,
-      "notes": "optional – Erkennungshinweis, Bauphase, Sonderform"
+      "notes": "optional – Erkennungshinweis, Bauphase, Sonderform",
+      "assumptions": ["Maße aus Schnitt Seite 2", "Neigung berechnet aus First-/Traufhöhe"]
     }
   ],
 
@@ -209,6 +247,7 @@ Erkenne auch ungewöhnliche Dachformen:
 - Spannweite = lichtes Maß zwischen Auflagern (relevant für Holzbalken-Dimensionierung).
 - Traufhöhe und Firsthöhe immer vom fertig gestellten Gelände (FGO) oder Rohbau-OK messen – notiere Referenzpunkt in assumptions wenn unklar.
 - Dachneigung in Grad (°) – falls nur Prozent angegeben, umrechnen (arctan).
+- DIMENSIONS PRIORISIERUNG: Höhenmaße (First, Trauf) → bevorzuge Werte aus Schnitt/Ansicht. Grundrissmaße (Länge, Breite) → bevorzuge Werte aus Grundriss. Bei Widerspruch: beide Werte in assumptions dokumentieren und Schnitt-Wert verwenden.
 
 === DACHTEILE (roofParts) ===
 - IMMER mindestens 1 Eintrag kind="main" für das Hauptdach.
@@ -218,6 +257,45 @@ Erkenne auch ungewöhnliche Dachformen:
 - ridgeDirection: "x" = First in Gebäude-Längsrichtung, "y" = First quer.
 - Maximal 6 Dachteile (mehr = Über-Interpretation).
 - Konfidenz: 0.9+ klar ablesbar | 0.5–0.7 vermutet | <0.5 unklar.
+- JEDER roofPart MUSS ein "assumptions"-Array mit Begründungen enthalten (z.B. "Maße aus Schnitt Seite 3", "Neigung berechnet aus Firsthöhe 6.26m und Traufhöhe 4.65m und Breite 8m").
+
+FÜR ROOFPARTS — gehe SCHRITT FÜR SCHRITT vor:
+
+Schritt 1: Identifiziere das HAUPTGEBÄUDE im Plan (größtes Volumen).
+  → liefere kind='main' mit allen Maßen.
+
+Schritt 2: Suche EXPLIZIT nach folgenden Sondersituationen:
+  (a) ZUBAU / ANBAU mit eigenem Dach? Häufig kleineres Pultdach an Hauptgebäude.
+      → kind='anbau', mit eigenen length/width/pitch.
+  (b) VORDACH über Eingang / Tor / Terrasse? Meist 1-3m tief, eigene Neigung.
+      → kind='vordach'.
+  (c) CARPORT / GARAGE mit Holzdach?
+      → kind='carport'.
+  (d) GAUBE auf Hauptdach (Schleppgaube, Spitzgaube)?
+      → kind='gaube', positionX/Y relativ zu Hauptdach-Mittelpunkt.
+  (e) ZWEITER GEBÄUDETEIL (T- oder L-Form Grundriss)?
+      → eigene roofPart kind='anbau' oder 'main' (wenn gleich groß).
+
+Schritt 3: Pro Dachteil PRÜFE und liefere:
+  - form: satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform
+  - pitch (Grad): aus Plan ablesen ODER berechnen aus (ridge-eaves)/(width/2)
+  - ridgeDirection: 'x' oder 'y'
+  - positionX, positionY: m relativ zu Hauptdach-Mittelpunkt
+  - confidence: 0.9+ nur wenn klar erkennbar, 0.5-0.7 wenn vermutet
+  - assumptions[]: Begründung je Dachteil (Pflicht)
+
+Schritt 4: SCHAU EXPLIZIT auf SCHNITTE und ANSICHTEN, nicht nur Grundriss.
+  - Im Grundriss: nur die Außenkanten sichtbar.
+  - In Ansichten: Dachformen + Höhen + Anbauten erkennbar.
+  - In Schnitten: Aufbauten + Sparren + innere Höhen erkennbar.
+  - Bevorzuge Werte aus SCHNITT für Höhen (First/Trauf).
+  - Bevorzuge Werte aus GRUNDRISS für Außenmaße.
+
+Schritt 5: BEACHTE FOLGENDE FALLEN:
+  - Schattenwurf zeigt KEIN Vordach (oft falsch interpretiert).
+  - Eine Garage in einem anderen Stockwerk ist KEIN separater Dachteil.
+  - Mehrere Geschoße im selben Gebäude = 1 Dachteil (= das oberste).
+  - Wenn nur 1 Hauptdach erkennbar → liefere genau 1 roofPart, NICHT mehr.
 
 === HOLZBALKENDECKEN (ceilings) ===
 Suche AKTIV nach Hinweisen auf Holzbalkendecken – auch wenn nicht explizit beschriftet:
@@ -299,7 +377,7 @@ serve(async (req) => {
       fileBase64: base64,
       mimeType: 'application/pdf',
       jsonMode: true,
-      maxTokens: 65536,
+      maxTokens: 80000,
       // retryWith übergibt ein Modell-Override (z.B. 'gemini-2.5-flash'), sonst undefined → Fallback-Kaskade
       ...(retryWith ? { model: retryWith as 'gemini-2.5-flash' } : {}),
     });

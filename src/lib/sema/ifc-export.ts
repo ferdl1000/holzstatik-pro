@@ -95,6 +95,156 @@ interface BeamIds {
   matAssoc:    number;
 }
 
+// ─── IFC4 Wall-Lines ──────────────────────────────────────────────────────────
+
+interface WallGeometry {
+  length: number; width: number; eavesHeight: number; wallThickness: number;
+}
+
+interface WallSpec {
+  id: string; name: string;
+  px: number; py: number; pz: number;  // placement origin
+  wallLength: number;                   // Extrusionslänge
+  wallHeight: number;                   // Extrusion Z (eavesHeight)
+  wallThickness: number;
+  dirX: number; dirY: number;           // Orientierungsvektor in XY-Ebene
+}
+
+function wallSpecs(g: WallGeometry): WallSpec[] {
+  const { length: len, width: wid, eavesHeight: h, wallThickness: t } = g;
+  return [
+    { id: 'wall_front',  name: 'Außenwand Traufseite Vorne',  px: -len/2, py: -wid/2, pz: 0, wallLength: len, wallHeight: h, wallThickness: t, dirX: 1, dirY: 0 },
+    { id: 'wall_back',   name: 'Außenwand Traufseite Hinten', px:  len/2, py:  wid/2, pz: 0, wallLength: len, wallHeight: h, wallThickness: t, dirX: -1, dirY: 0 },
+    { id: 'wall_left',   name: 'Giebelwand Links',            px: -len/2, py:  wid/2, pz: 0, wallLength: wid, wallHeight: h, wallThickness: t, dirX: 0, dirY: -1 },
+    { id: 'wall_right',  name: 'Giebelwand Rechts',           px:  len/2, py: -wid/2, pz: 0, wallLength: wid, wallHeight: h, wallThickness: t, dirX: 0, dirY:  1 },
+  ];
+}
+
+function buildWallLinesIFC4(
+  geo: WallGeometry,
+  b: BaseIds,
+): { lines: string[]; wallIds: number[] } {
+  const lines: string[] = [];
+  const wallIds: number[] = [];
+  const specs = wallSpecs(geo);
+
+  specs.forEach((ws, idx) => {
+    const idPlace3d   = nextId();
+    const idPlace     = nextId();
+    const idProfile   = nextId();
+    const idExtruded  = nextId();
+    const idShapeRep  = nextId();
+    const idProdDef   = nextId();
+    const idWall      = nextId();
+    const idMat       = nextId();
+    const idMatAssoc  = nextId();
+
+    const angle = Math.atan2(ws.dirY, ws.dirX);
+    const cosA  = Math.cos(angle).toFixed(6);
+    const sinA  = Math.sin(angle).toFixed(6);
+
+    lines.push(`#${idPlace3d}  = IFCAXIS2PLACEMENT3D(IFCCARTESIANPOINT((${ifcReal(ws.px)},${ifcReal(ws.py)},${ifcReal(ws.pz)})),#${b.idAxisZ},IFCDIRECTION((${cosA},${sinA},0.)));`);
+    lines.push(`#${idPlace}    = IFCLOCALPLACEMENT(#${b.idStoreyPlace},#${idPlace3d});`);
+    // Rechteckprofil: Breite = wallThickness, Tiefe = wallLength (wird in X extrudiert)
+    lines.push(`#${idProfile}  = IFCRECTANGLEPROFILEDEF(.AREA.,$,IFCAXIS2PLACEMENT2D(IFCCARTESIANPOINT((0.,0.)),$),${ifcReal(ws.wallThickness)},${ifcReal(ws.wallLength)});`);
+    lines.push(`#${idExtruded} = IFCEXTRUDEDAREASOLID(#${idProfile},IFCAXIS2PLACEMENT3D(IFCCARTESIANPOINT((0.,0.,0.)),IFCDIRECTION((0.,0.,1.)),IFCDIRECTION((1.,0.,0.))),IFCDIRECTION((0.,0.,1.)),${ifcReal(ws.wallHeight)});`);
+    lines.push(`#${idShapeRep} = IFCSHAPEREPRESENTATION(#${b.idWorldCtx},${ifcLabel('Body')},${ifcLabel('SweptSolid')},(#${idExtruded}));`);
+    lines.push(`#${idProdDef}  = IFCPRODUCTDEFINITIONSHAPE($,$,(#${idShapeRep}));`);
+    lines.push(`#${idWall}     = IFCWALLSTANDARDCASE(${ifcLabel(ws.id)},#${b.idOwner},${ifcLabel(ws.name)},${ifcLabel('Mauerwerk')},$,#${idPlace},#${idProdDef},$);`);
+    lines.push(`#${idMat}      = IFCMATERIAL(${ifcLabel('Mauerwerk')},$,$);`);
+    lines.push(`#${idMatAssoc} = IFCRELASSOCIATESMATERIAL(${ifcLabel('wallmat_' + idx)},#${b.idOwner},$,$,(#${idWall}),#${idMat});`);
+    wallIds.push(idWall);
+  });
+
+  return { lines, wallIds };
+}
+
+function buildWallLinesIFC2x3(
+  geo: WallGeometry,
+  b: BaseIds,
+): { lines: string[]; wallIds: number[] } {
+  const lines: string[] = [];
+  const wallIds: number[] = [];
+  const specs = wallSpecs(geo);
+
+  specs.forEach((ws, idx) => {
+    const idPlace3d   = nextId();
+    const idPlace     = nextId();
+    const idProfile   = nextId();
+    const idExtruded  = nextId();
+    const idShapeRep  = nextId();
+    const idProdDef   = nextId();
+    const idWall      = nextId();
+    const idMat       = nextId();
+    const idMatLayer  = nextId();
+    const idLayerSet  = nextId();
+    const idMatAssoc  = nextId();
+
+    const angle = Math.atan2(ws.dirY, ws.dirX);
+    const cosA  = Math.cos(angle).toFixed(6);
+    const sinA  = Math.sin(angle).toFixed(6);
+
+    lines.push(`#${idPlace3d}  = IFCAXIS2PLACEMENT3D(IFCCARTESIANPOINT((${ifcReal(ws.px)},${ifcReal(ws.py)},${ifcReal(ws.pz)})),#${b.idAxisZ},IFCDIRECTION((${cosA},${sinA},0.)));`);
+    lines.push(`#${idPlace}    = IFCLOCALPLACEMENT(#${b.idStoreyPlace},#${idPlace3d});`);
+    lines.push(`#${idProfile}  = IFCRECTANGLEPROFILEDEF(.AREA.,$,IFCAXIS2PLACEMENT2D(IFCCARTESIANPOINT((0.,0.)),$),${ifcReal(ws.wallThickness)},${ifcReal(ws.wallLength)});`);
+    lines.push(`#${idExtruded} = IFCEXTRUDEDAREASOLID(#${idProfile},IFCAXIS2PLACEMENT3D(IFCCARTESIANPOINT((0.,0.,0.)),IFCDIRECTION((0.,0.,1.)),IFCDIRECTION((1.,0.,0.))),IFCDIRECTION((0.,0.,1.)),${ifcReal(ws.wallHeight)});`);
+    lines.push(`#${idShapeRep} = IFCSHAPEREPRESENTATION(#${b.idWorldCtx},${ifcLabel('Body')},${ifcLabel('SweptSolid')},(#${idExtruded}));`);
+    lines.push(`#${idProdDef}  = IFCPRODUCTDEFINITIONSHAPE($,$,(#${idShapeRep}));`);
+    // IFC2x3: IFCWALLSTANDARDCASE ohne PredefinedType
+    lines.push(`#${idWall}     = IFCWALLSTANDARDCASE(${ifcLabel(ws.id)},#${b.idOwner},${ifcLabel(ws.name)},${ifcLabel('Mauerwerk')},$,#${idPlace},#${idProdDef},$);`);
+    lines.push(`#${idMat}      = IFCMATERIAL(${ifcLabel('Mauerwerk')});`);
+    lines.push(`#${idMatLayer} = IFCMATERIALLAYER(#${idMat},${ifcReal(ws.wallThickness)},$);`);
+    lines.push(`#${idLayerSet} = IFCMATERIALLAYERSET((#${idMatLayer}),${ifcLabel('Mauerwerk')});`);
+    lines.push(`#${idMatAssoc} = IFCRELASSOCIATESMATERIAL(${ifcLabel('wallmat_' + idx)},#${b.idOwner},$,$,(#${idWall}),#${idLayerSet});`);
+    wallIds.push(idWall);
+  });
+
+  return { lines, wallIds };
+}
+
+// ─── Storey-Hierarchie für mehrere Decken ─────────────────────────────────────
+
+interface StoreyIds {
+  place3d: number; place: number; storey: number; elevation: number;
+}
+
+function buildMultiStoreyLines(
+  ceilings: Array<{ id: string; level: string }>,
+  b: BaseIds,
+  projectId: string,
+  ownerHistId: number,
+  bldgId: number,
+): { lines: string[]; storeyIds: StoreyIds[]; relAggId: number } {
+  const lines: string[] = [];
+  const storeyIds: StoreyIds[] = [];
+
+  // Storey-Ebenen: EG=0, OG=3, DG=6, Spitzboden=9 (schematisch)
+  const levelElevation: Record<string, number> = {
+    'EG': 0, 'OG': 3, 'DG': 6, 'Spitzboden': 9,
+  };
+
+  // Eindeutige Levels aus ceilings + immer DG (Dachgeschoss)
+  const levels = ['EG', ...ceilings.map(c => c.level), 'DG']
+    .filter((v, i, a) => a.indexOf(v) === i);
+
+  for (const lvl of levels) {
+    const elev = levelElevation[lvl] ?? 0;
+    const p3d = nextId();
+    const pl  = nextId();
+    const st  = nextId();
+    lines.push(`#${p3d} = IFCAXIS2PLACEMENT3D(IFCCARTESIANPOINT((0.,0.,${ifcReal(elev)})),#${b.idAxisZ},#${b.idAxisX});`);
+    lines.push(`#${pl}  = IFCLOCALPLACEMENT(#${b.idBldgPlace},#${p3d});`);
+    lines.push(`#${st}  = IFCBUILDINGSTOREY(${ifcLabel(projectId + '_storey_' + lvl)},#${ownerHistId},${ifcLabel(lvl)},$,$,#${pl},$,$,.ELEMENT.,${ifcReal(elev)});`);
+    storeyIds.push({ place3d: p3d, place: pl, storey: st, elevation: elev });
+  }
+
+  const storeyRefs = storeyIds.map(s => `#${s.storey}`).join(',');
+  const relAggId = nextId();
+  lines.push(`#${relAggId} = IFCRELAGGREGATES(${ifcLabel('rel_storeys_multi')},#${ownerHistId},$,$,#${bldgId},(${storeyRefs}));`);
+
+  return { lines, storeyIds, relAggId };
+}
+
 function allocBeamIds(members: TimberMember[]): BeamIds[] {
   return members.map(() => ({
     placement3d: nextId(),
@@ -265,9 +415,39 @@ export function exportToIFC4(project: Project, members: TimberMember[]): string 
   const beamIdsList = allocBeamIds(members);
   const baseLines = buildBaseLines(b, project);
   const { lines: beamLines, beamIds } = buildBeamLinesIFC4(members, beamIdsList, b);
-  const beamRefs = beamIds.map(id => `#${id}`).join(',');
-  const containsLine = `#${nextId()}  = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_contains')},#${b.idOwner},$,$,(${beamRefs}),#${b.idStorey});`;
-  return wrapStep(project, 'IFC4', [...baseLines, ...beamLines, containsLine]);
+
+  // Außenwände
+  const geo = project.geometry;
+  const wallThickness = 0.25; // Mauerwerk-Standard, keine wallThickness in BuildingGeometry
+  const wallGeo: WallGeometry = {
+    length:       geo?.length.value      ?? 10,
+    width:        geo?.width.value       ?? 8,
+    eavesHeight:  geo?.eavesHeight.value ?? 4,
+    wallThickness,
+  };
+  const { lines: wallLines, wallIds } = buildWallLinesIFC4(wallGeo, b);
+
+  // Multi-Storey wenn ceilings vorhanden
+  const extraLines: string[] = [];
+  let topStoreyId = b.idStorey;
+
+  if (project.ceilings && project.ceilings.length > 0) {
+    const { lines: msLines, storeyIds, relAggId: _relAgg } = buildMultiStoreyLines(
+      project.ceilings, b, project.id, b.idOwner, b.idBldg,
+    );
+    extraLines.push(...msLines);
+    // Sparren im obersten Storey (letzter in storeyIds)
+    topStoreyId = storeyIds[storeyIds.length - 1].storey;
+    // Wände in EG-Storey (ersten Storey)
+    const egStoreyId = storeyIds[0].storey;
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_walls')},#${b.idOwner},$,$,(${wallIds.map(id => `#${id}`).join(',')}),#${egStoreyId});`);
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_beams')},#${b.idOwner},$,$,(${beamIds.map(id => `#${id}`).join(',')}),#${topStoreyId});`);
+  } else {
+    const allIds = [...beamIds, ...wallIds].map(id => `#${id}`).join(',');
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_contains')},#${b.idOwner},$,$,(${allIds}),#${b.idStorey});`);
+  }
+
+  return wrapStep(project, 'IFC4', [...baseLines, ...beamLines, ...wallLines, ...extraLines]);
 }
 
 /**
@@ -285,9 +465,35 @@ export function exportToIFC2x3(project: Project, members: TimberMember[]): strin
   const beamIdsList = allocBeamIds(members);
   const baseLines = buildBaseLines(b, project);
   const { lines: beamLines, beamIds } = buildBeamLinesIFC2x3(members, beamIdsList, b);
-  const beamRefs = beamIds.map(id => `#${id}`).join(',');
-  const containsLine = `#${nextId()}  = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_contains')},#${b.idOwner},$,$,(${beamRefs}),#${b.idStorey});`;
-  return wrapStep(project, 'IFC2X3', [...baseLines, ...beamLines, containsLine]);
+
+  // Außenwände
+  const geo = project.geometry;
+  const wallGeo: WallGeometry = {
+    length:       geo?.length.value      ?? 10,
+    width:        geo?.width.value       ?? 8,
+    eavesHeight:  geo?.eavesHeight.value ?? 4,
+    wallThickness: 0.25,
+  };
+  const { lines: wallLines, wallIds } = buildWallLinesIFC2x3(wallGeo, b);
+
+  // Multi-Storey wenn ceilings vorhanden
+  const extraLines: string[] = [];
+
+  if (project.ceilings && project.ceilings.length > 0) {
+    const { lines: msLines, storeyIds } = buildMultiStoreyLines(
+      project.ceilings, b, project.id, b.idOwner, b.idBldg,
+    );
+    extraLines.push(...msLines);
+    const topStoreyId = storeyIds[storeyIds.length - 1].storey;
+    const egStoreyId  = storeyIds[0].storey;
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_walls')},#${b.idOwner},$,$,(${wallIds.map(id => `#${id}`).join(',')}),#${egStoreyId});`);
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_beams')},#${b.idOwner},$,$,(${beamIds.map(id => `#${id}`).join(',')}),#${topStoreyId});`);
+  } else {
+    const allIds = [...beamIds, ...wallIds].map(id => `#${id}`).join(',');
+    extraLines.push(`#${nextId()} = IFCRELCONTAINEDINSPATIALSTRUCTURE(${ifcLabel('rel_contains')},#${b.idOwner},$,$,(${allIds}),#${b.idStorey});`);
+  }
+
+  return wrapStep(project, 'IFC2X3', [...baseLines, ...beamLines, ...wallLines, ...extraLines]);
 }
 
 /**

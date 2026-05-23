@@ -7,12 +7,12 @@
  * Normen: ÖNORM B 1991-1-1 / -1-3 / -1-4
  */
 
-import type { ExtractedAddress, BuildingGeometry, LoadCase } from '@/types/project';
+import type { ExtractedAddress, BuildingGeometry, LoadCase, RoofCovering } from '@/types/project';
 import type { AutoLoadsResult, AutoAssumption } from './contracts';
 import { lookupPlzNearest } from '@/lib/geo/plzDatabase';
 import { calculateSnowLoad, SNOW_ZONE_BY_STATE } from '@/lib/calc/loads/snow';
 import { calculateWindLoad, WIND_ZONE_BY_STATE } from '@/lib/calc/loads/wind';
-import { calculateDeadLoad, DEFAULT_TILED_ROOF } from '@/lib/calc/loads/dead';
+import { calculateDeadLoad, DEFAULT_TILED_ROOF, type DeadLoadResult } from '@/lib/calc/loads/dead';
 import type { SnowZone } from '@/lib/calc/loads/snow';
 import type { WindZone, TerrainCategory } from '@/lib/calc/loads/wind';
 
@@ -21,10 +21,27 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** Eigengewicht der Eindeckung pro Typ (kN/m²) – Deckung + Lattung ohne Tragwerk */
+const COVERING_WEIGHT: Record<RoofCovering['type'], number> = {
+  tile_clay:      0.55,
+  tile_concrete:  0.55,
+  metal_falz:     0.12,
+  trapezblech:    0.10,
+  schiefer:       0.55,
+  sandwich_paneel:0.18,
+  gruendach_ext:  1.00,
+  gruendach_int:  2.50,
+  pv:             0.20,
+  bitumen:        0.30,
+  sonstiges:      0.55,
+  unbekannt:      0.55,
+};
+
 export function autoComputeLoads(
   address: ExtractedAddress | undefined,
   geometry: BuildingGeometry,
   roofForm: 'satteldach' | 'pultdach' | 'walmdach' | 'flachdach' | 'krueppelwalmdach' | 'mischform',
+  coveringType?: RoofCovering,
 ): AutoLoadsResult {
   const assumptions: AutoAssumption[] = [];
 
@@ -142,14 +159,44 @@ export function autoComputeLoads(
 
   // ─── 5. Eigengewicht ──────────────────────────────────────────────────────
 
-  const deadResult = calculateDeadLoad(DEFAULT_TILED_ROOF);
+  let deadResult: DeadLoadResult;
+  const STRUCTURE_WEIGHT = 0.15; // Sparren + Lattung-Anteil kN/m²
 
-  assumptions.push({
-    field: 'roofComposition',
-    value: 'Tondachziegel + Lattung + Mineralwolle 200mm + GK 12,5mm',
-    reason: `Standard-Wohndach-Aufbau (DEFAULT_TILED_ROOF) angenommen: ${deadResult.gk.toFixed(2)} kN/m². Kann im Lastmodul angepasst werden.`,
-    source: 'standard',
-  });
+  if (coveringType && coveringType.type !== 'unbekannt') {
+    const coveringWeight = COVERING_WEIGHT[coveringType.type];
+    const baseResult = calculateDeadLoad({
+      layers: [
+        { layerId: 'unterspannbahn' },
+        { layerId: 'mineralwolle_200' },
+        { layerId: 'dampfbremse' },
+        { layerId: 'gk_12_5' },
+      ],
+    });
+    const totalGk = coveringWeight + STRUCTURE_WEIGHT + baseResult.gk;
+    deadResult = {
+      gk: totalGk,
+      layersBreakdown: [
+        { name: `Eindeckung ${coveringType.type}`, weight: coveringWeight },
+        { name: 'Tragwerk (Sparren+Lattung)', weight: STRUCTURE_WEIGHT },
+        ...baseResult.layersBreakdown,
+      ],
+      explanation: `Dachaufbau gesamt: ${totalGk.toFixed(2)} kN/m² (Eindeckung ${coveringType.type}: ${coveringWeight.toFixed(2)} + Tragwerk: ${STRUCTURE_WEIGHT.toFixed(2)} + Ausbau: ${baseResult.gk.toFixed(2)} kN/m²)`,
+    };
+    assumptions.push({
+      field: 'roofComposition',
+      value: `Eindeckung ${coveringType.type} → g_k = ${coveringWeight.toFixed(2)} kN/m² + ${STRUCTURE_WEIGHT.toFixed(2)} Tragwerk`,
+      reason: `Eindeckung aus Plan erkannt (${coveringType.evidence || 'KI-Extraktion'}, Konfidenz ${(coveringType.confidence * 100).toFixed(0)}%): ${coveringType.type} → Eigengewicht ${totalGk.toFixed(2)} kN/m²`,
+      source: coveringType.confidence >= 0.7 ? 'derived' : 'standard',
+    });
+  } else {
+    deadResult = calculateDeadLoad(DEFAULT_TILED_ROOF);
+    assumptions.push({
+      field: 'roofComposition',
+      value: 'Tondachziegel + Lattung + Mineralwolle 200mm + GK 12,5mm',
+      reason: `${coveringType?.type === 'unbekannt' ? 'Eindeckungstyp unbekannt – ' : ''}Standard-Wohndach-Aufbau (DEFAULT_TILED_ROOF) angenommen: ${deadResult.gk.toFixed(2)} kN/m². Kann im Lastmodul angepasst werden.`,
+      source: 'standard',
+    });
+  }
 
   // ─── 6. LoadCases zusammenstellen ────────────────────────────────────────
 
