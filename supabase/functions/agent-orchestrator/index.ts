@@ -325,7 +325,7 @@ serve(async (req) => {
       log.push('ℹ RoofParts: Nur Hauptdach (kein multi-part-Ergebnis aus Extraktion)');
     }
 
-    // ceilings: Holzbalkendecken durchreichen
+    // ceilings: Decken durchreichen (mit Konstruktionstyp)
     const extractedCeilings = (extracted.ceilings as Array<any> | undefined);
     if (extractedCeilings && extractedCeilings.length > 0) {
       projectUpdate.ceilings = extractedCeilings.map((c: any, i: number) => ({
@@ -334,11 +334,56 @@ serve(async (req) => {
         area: c.area ?? 0,
         span: c.span ?? 0,
         nutzung: c.nutzung ?? 'Wohnen',
+        ...(c.constructionType ? { constructionType: c.constructionType } : {}),
+        ...(c.evidence ? { evidence: c.evidence } : {}),
         confidence: c.confidence ?? 0.5,
       }));
-      log.push(`✓ Ceilings: ${projectUpdate.ceilings.length} Holzbalkendecke(n) erkannt (${projectUpdate.ceilings.map((c: any) => c.level).join(', ')})`);
+      const stbCount = projectUpdate.ceilings.filter((c: any) => c.constructionType === 'stb_decke').length;
+      const holzCount = projectUpdate.ceilings.filter((c: any) => c.constructionType === 'holzbalkendecke').length;
+      log.push(`✓ Ceilings: ${projectUpdate.ceilings.length} Decke(n) erkannt (${holzCount}× Holzbalken, ${stbCount}× STB) — Levels: ${projectUpdate.ceilings.map((c: any) => c.level).join(', ')}`);
     } else {
-      log.push('ℹ Ceilings: Keine Holzbalkendecken erkannt');
+      log.push('ℹ Ceilings: Keine Decken erkannt');
+    }
+
+    // wallConstructions: Wand-Konstruktionstypen durchreichen
+    const extractedWalls = (extracted.wallConstructions as Array<any> | undefined);
+    if (extractedWalls && extractedWalls.length > 0) {
+      projectUpdate.wallConstructions = extractedWalls.map((w: any) => ({
+        level: w.level ?? 'EG',
+        type: w.type ?? 'unbekannt',
+        ...(w.thickness_mm ? { thickness_mm: w.thickness_mm } : {}),
+        ...(w.material ? { material: w.material } : {}),
+        ...(w.evidence ? { evidence: w.evidence } : {}),
+        confidence: w.confidence ?? 0.5,
+      }));
+      const stbWalls = projectUpdate.wallConstructions.filter((w: any) => w.type === 'stb').map((w: any) => w.level).join(', ');
+      const holzWalls = projectUpdate.wallConstructions.filter((w: any) => ['holzstaender', 'kvh', 'bsh'].includes(w.type)).map((w: any) => w.level).join(', ');
+      log.push(`✓ WallConstructions: ${projectUpdate.wallConstructions.length} Geschoss/Wand erkannt (STB: ${stbWalls || '-'}, Holz: ${holzWalls || '-'})`);
+    } else {
+      log.push('ℹ WallConstructions: Keine Wand-Konstruktionstypen erkannt');
+    }
+
+    // fireProtection: Brandschutz + GK durchreichen
+    const extractedFireProtection = extracted.fireProtection as any | undefined;
+    if (extractedFireProtection && (extractedFireProtection.buildingClass || (extractedFireProtection.fireResistanceClasses as unknown[])?.length > 0)) {
+      projectUpdate.fireProtection = {
+        buildingClass: extractedFireProtection.buildingClass ?? undefined,
+        buildingClassReason: extractedFireProtection.buildingClassReason ?? undefined,
+        fireResistanceClasses: extractedFireProtection.fireResistanceClasses ?? [],
+        confidence: extractedFireProtection.confidence ?? 0.5,
+      };
+      const reiList = ((extractedFireProtection.fireResistanceClasses as Array<{code: string}> | undefined) || []).map((r: {code: string}) => r.code).join(', ');
+      log.push(`✓ Brandschutz erkannt: ${extractedFireProtection.buildingClass ?? '(GK unbekannt)'}, REI-Klassen: ${reiList || '–'}`);
+      await supabase.from('audit_log').insert({
+        project_id: projectId, agent: 'Dokumenten-Agent',
+        action: `Brandschutz erkannt: ${extractedFireProtection.buildingClass ?? 'GK unbekannt'}, REI-Klassen: ${reiList || '–'}`,
+        field: 'fireProtection',
+        reason: extractedFireProtection.buildingClassReason ?? 'KI-Extraktion',
+        new_value: JSON.stringify(projectUpdate.fireProtection),
+        user_initiated: false,
+      });
+    } else {
+      log.push('ℹ Brandschutz: Keine GK/REI-Angaben im Plan erkannt');
     }
 
     // covering: Eindeckungstyp + Eigengewicht durchreichen

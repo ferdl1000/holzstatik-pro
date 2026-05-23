@@ -26,11 +26,34 @@ export interface AgentResult<T = unknown> {
 // ===== Ceiling Areas =====
 export interface CeilingArea {
   id: string;
-  level: string;            // "EG", "OG", "Spitzboden"
+  level: string;            // "EG", "OG", "DG", "Spitzboden"
   area: number;             // m² Grundfläche
   span: number;             // m längere Spannweite
-  nutzung: 'Wohnen' | 'Lager' | 'Versammlung' | 'Spitzboden';
+  nutzung: 'Wohnen' | 'Lager' | 'Versammlung' | 'Spitzboden' | 'Buero' | 'Sonstiges';
+
+  // Konstruktionstyp — bestimmt ob Holzbalken generiert werden
+  constructionType?: 'holzbalkendecke' | 'stb_decke' | 'rippendecke' | 'unbekannt';
+  evidence?: string;        // z.B. "STB-Decke laut Aufbau 09"
+
   confidence: number;
+}
+
+// ===== Wand-Konstruktion =====
+export interface WallConstruction {
+  level: string;
+  type: 'stb' | 'ziegel' | 'holzstaender' | 'kvh' | 'bsh' | 'mischbau' | 'unbekannt';
+  thickness_mm?: number;    // z.B. 250 für STB 25cm, 380 für 38er Ziegel
+  material?: string;        // 'STB', 'Ziegel 38', 'Holzständer', etc.
+  evidence?: string;
+  confidence: number;
+}
+
+// ===== Fire Protection =====
+export interface FireProtection {
+  buildingClass?: 'GK1' | 'GK2' | 'GK3' | 'GK4' | 'GK5';
+  buildingClassReason?: string;
+  fireResistanceClasses?: Array<{ code: string; applies_to?: string; evidence?: string }>;
+  confidence?: number;
 }
 
 // ===== Project =====
@@ -59,6 +82,10 @@ export interface Project {
   ceilings?: CeilingArea[];
   /** Erkannte Eindeckung mit Eigengewicht */
   coveringType?: RoofCovering;
+  /** Wand-Konstruktionstypen pro Geschoss */
+  wallConstructions?: WallConstruction[];
+  /** Brandschutz: Gebäudeklasse + REI-Nachweise aus Plan */
+  fireProtection?: FireProtection;
 }
 
 // ===== Documents =====

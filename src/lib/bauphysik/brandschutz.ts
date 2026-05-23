@@ -6,6 +6,50 @@
 export type BauKlasse = 'GK1' | 'GK2' | 'GK3' | 'GK4' | 'GK5';
 export type REI = 'REI 30' | 'REI 60' | 'REI 90' | 'REI 120';
 
+// ===== REI-Klassen-Parsing (OIB RL2 / EN 13501) =====
+
+export interface FireResistanceClass {
+  code: string;          // 'REI 30', 'R 60', 'EI 30-C', etc.
+  R?: boolean;           // Tragfähigkeit
+  E?: boolean;           // Raumabschluß
+  I?: boolean;           // Wärmedämmung
+  M?: boolean;           // mechanische Beanspruchung
+  C?: boolean;           // Selbstschließend
+  duration_min: number;  // 30, 60, 90, 120, 180
+}
+
+/**
+ * Parst einen REI-Klassencode aus einem Plan-Beschriftungstext.
+ * Unterstützt: "REI 30" / "R 60" / "EI 30-C" / "REI 90-M" / "RM"
+ */
+export function parseREIClass(code: string): FireResistanceClass | null {
+  const upper = code.toUpperCase().trim();
+  if (upper === 'RM') return { code: 'RM', R: true, M: true, duration_min: 0 };
+  const m = upper.match(/^([REIMW]+)\s*(\d+)(?:-([CMS]+))?$/);
+  if (!m) return null;
+  const flags = m[1];
+  const duration = parseInt(m[2], 10);
+  const extras = m[3] || '';
+  return {
+    code: upper,
+    R: flags.includes('R'),
+    E: flags.includes('E'),
+    I: flags.includes('I'),
+    M: flags.includes('M') || extras.includes('M'),
+    C: extras.includes('C'),
+    duration_min: duration,
+  };
+}
+
+/** Empfohlene REI-Mindestanforderung je GK (OIB RL2) */
+export const GK_REI_EMPFEHLUNG: Record<BauKlasse, { rei: REI | null; beschreibung: string }> = {
+  GK1: { rei: null,       beschreibung: 'GK1 – keine Anforderung' },
+  GK2: { rei: 'REI 30',  beschreibung: 'GK2 – REI 30 (brandhemmend)' },
+  GK3: { rei: 'REI 60',  beschreibung: 'GK3 – REI 60 (hochbrandhemmend)' },
+  GK4: { rei: 'REI 90',  beschreibung: 'GK4 – REI 90 (brandbeständig)' },
+  GK5: { rei: 'REI 90',  beschreibung: 'GK5 – REI 90 (Sonderbau, brandbeständig)' },
+};
+
 /** Mindestanforderungen nach OIB RL2 Tabelle 1 */
 const REI_MATRIX: Record<BauKlasse, { tragwerk: REI; decke: REI }> = {
   GK1: { tragwerk: 'REI 30', decke: 'REI 30' },

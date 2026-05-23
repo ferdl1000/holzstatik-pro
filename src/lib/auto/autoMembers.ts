@@ -7,7 +7,7 @@
  * - Tragsystem (StructuralSystem)
  */
 
-import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember, CeilingArea } from '@/types/project';
+import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember, CeilingArea, WallConstruction } from '@/types/project';
 import type { AutoAssumption, AutoMembersResult } from '@/lib/auto/contracts';
 import type { JointSpec } from '@/lib/auto/standards';
 import { splitMemberAtJoints, suggestCeilingBeam } from '@/lib/auto/standards';
@@ -52,7 +52,7 @@ export function autoGenerateMembers(
   geometry: BuildingGeometry,
   _roofType: RoofType,
   structuralSystem: StructuralSystem,
-  opts?: { sparrenSpacing?: number; ceilings?: CeilingArea[] },
+  opts?: { sparrenSpacing?: number; ceilings?: CeilingArea[]; wallConstructions?: WallConstruction[] },
 ): AutoMembersResult {
   _idCounter = 0; // reset für deterministische IDs
 
@@ -196,9 +196,29 @@ export function autoGenerateMembers(
       });
     }
 
-    // Deckenbalken für Hallen-Modus
+    // Deckenbalken für Hallen-Modus (nur Holzbalkendecken)
     if (opts?.ceilings && opts.ceilings.length > 0) {
       for (const ceiling of opts.ceilings) {
+        const cType = ceiling.constructionType;
+        // STB-Decken: überspringen, Annahme eintragen
+        if (cType === 'stb_decke' || cType === 'rippendecke') {
+          assumptions.push({
+            field: `decke.${ceiling.id}`,
+            value: 'nicht im Holzauszug',
+            reason: `${cType === 'stb_decke' ? 'STB-Decke' : 'Rippendecke'} ${ceiling.level}: außerhalb Zimmerei-Lieferumfang — vom Statiker für Beton separat zu berechnen.${ceiling.evidence ? ` Nachweis: ${ceiling.evidence}` : ''}`,
+            source: 'derived',
+          });
+          continue;
+        }
+        // unbekannt: Holzbalkendecke als Default (mit Warnung)
+        if (cType === 'unbekannt') {
+          assumptions.push({
+            field: `decke.${ceiling.id}.typ`,
+            value: 'holzbalkendecke (angenommen)',
+            reason: `Decke ${ceiling.level}: Konstruktionstyp unklar — Holzbalkendecke angenommen. Bitte im Plan prüfen!`,
+            source: 'fallback',
+          });
+        }
         const spec = { span: ceiling.span, area: ceiling.area, nutzung: ceiling.nutzung };
         const { b, h: dh, spacing } = suggestCeilingBeam(spec);
         const orthoSpan = ceiling.area / ceiling.span;
@@ -468,9 +488,29 @@ export function autoGenerateMembers(
     `Sparrenabstand ${spacing * 100} cm, Sparrenlänge ${sparrenLen} m. ` +
     `Alle Querschnitte vorläufig (calculationStatus=yellow), Optimizer-Schritt ausstehend.`;
 
-  // ── Deckenbalken aus erkannten Holzbalkendecken ───────────────────────────
+  // ── Deckenbalken aus erkannten Decken (nur Holzbalkendecken) ────────────────
   if (opts?.ceilings && opts.ceilings.length > 0) {
     for (const ceiling of opts.ceilings) {
+      const cType = ceiling.constructionType;
+      // STB-Decken: überspringen, Annahme eintragen
+      if (cType === 'stb_decke' || cType === 'rippendecke') {
+        assumptions.push({
+          field: `decke.${ceiling.id}`,
+          value: 'nicht im Holzauszug',
+          reason: `${cType === 'stb_decke' ? 'STB-Decke' : 'Rippendecke'} ${ceiling.level}: außerhalb Zimmerei-Lieferumfang — vom Statiker für Beton separat zu berechnen.${ceiling.evidence ? ` Nachweis: ${ceiling.evidence}` : ''}`,
+          source: 'derived',
+        });
+        continue;
+      }
+      // unbekannt: Holzbalkendecke als Default (mit Warnung)
+      if (cType === 'unbekannt') {
+        assumptions.push({
+          field: `decke.${ceiling.id}.typ`,
+          value: 'holzbalkendecke (angenommen)',
+          reason: `Decke ${ceiling.level}: Konstruktionstyp unklar — Holzbalkendecke angenommen. Bitte im Plan prüfen!`,
+          source: 'fallback',
+        });
+      }
       const spec = { span: ceiling.span, area: ceiling.area, nutzung: ceiling.nutzung };
       const { b, h, spacing } = suggestCeilingBeam(spec);
       const orthoSpan = ceiling.area / ceiling.span;
@@ -492,6 +532,38 @@ export function autoGenerateMembers(
         value: `${count}× ${cs} C24 @ ${spacing * 100} cm`,
         reason: `Holzbalkendecke ${ceiling.level} (${ceiling.nutzung}, ${ceiling.area} m², Spannweite ${ceiling.span} m): ` +
           `${count} Deckenbalken ${cs} C24, Achsabstand ${spacing * 100} cm (Daumenregel h=L/${spec.nutzung === 'Spitzboden' ? 20 : 17}).`,
+        source: 'derived',
+      });
+    }
+  }
+
+  // ── Wand-Konstruktionen: Annahmen eintragen (keine Holz-Member für STB/Ziegel) ──
+  if (opts?.wallConstructions && opts.wallConstructions.length > 0) {
+    const stbLevels = opts.wallConstructions.filter(w => w.type === 'stb').map(w => w.level);
+    const ziegelLevels = opts.wallConstructions.filter(w => w.type === 'ziegel').map(w => w.level);
+    const holzLevels = opts.wallConstructions.filter(w => ['holzstaender', 'kvh', 'bsh'].includes(w.type)).map(w => w.level);
+
+    if (stbLevels.length > 0) {
+      assumptions.push({
+        field: 'waende.stb',
+        value: stbLevels.join(', '),
+        reason: `Wände ${stbLevels.join(', ')}: STB → außerhalb Zimmerei-Lieferumfang. Keine Wand-Member im Holzauszug.`,
+        source: 'derived',
+      });
+    }
+    if (ziegelLevels.length > 0) {
+      assumptions.push({
+        field: 'waende.ziegel',
+        value: ziegelLevels.join(', '),
+        reason: `Wände ${ziegelLevels.join(', ')}: Ziegelmauerwerk → außerhalb Zimmerei-Lieferumfang. Keine Wand-Member im Holzauszug.`,
+        source: 'derived',
+      });
+    }
+    if (holzLevels.length > 0) {
+      assumptions.push({
+        field: 'waende.holz',
+        value: holzLevels.join(', '),
+        reason: `Wände ${holzLevels.join(', ')}: Holzständerbau — ggf. Schwellen + Riegel in Kostenschätzung ergänzen (separater Schritt).`,
         source: 'derived',
       });
     }

@@ -8,7 +8,7 @@
  *  - byRoofPart:   (optional) Aufschlüsselung pro Dachteil wenn opts.roofParts übergeben
  */
 
-import type { TimberMember, BuildingGeometry, RoofCovering } from '@/types/project';
+import type { TimberMember, BuildingGeometry, RoofCovering, WallConstruction } from '@/types/project';
 import type { RoofPart } from '@/types/roofParts';
 import type { AutoCostResult, OrderListItem } from './contracts';
 import type { CostEstimate, CostPosition } from '@/lib/pricing';
@@ -52,6 +52,10 @@ interface AutoCostOptions {
   includeDeckPlanks?: boolean;
   /** Transport-Plan automatisch dazu rechnen (default true) */
   includeTransport?: boolean;
+  /** Wand-Konstruktionstypen für Zusatzpositionen (optional) */
+  wallConstructions?: WallConstruction[];
+  /** Grundfläche pro Geschoss für Holzständerwand-Berechnung (m²) — wird aus geometry abgeleitet wenn nicht angegeben */
+  floorAreaPerLevel?: number;
 }
 
 export interface AutoCostExtras {
@@ -501,5 +505,55 @@ export function autoComputeCosts(
   withLabor = injectExtras(withLabor, true);
   orderList = [...orderList, ...extraOrderItems];
 
+  // Holzständerwand-Pauschalposition wenn vorhanden
+  const wallItems = buildWallConstructionPositions(opts?.wallConstructions, opts?.floorAreaPerLevel ?? groundArea);
+  if (wallItems.length > 0) {
+    const wallNet = wallItems.reduce((s, p) => s + p.total, 0);
+    const vatRate = withLabor.factors.vat;
+    const wallVat = wallNet * vatRate / 100;
+    withLabor = {
+      ...withLabor,
+      positions: [...withLabor.positions, ...wallItems],
+      subtotals: { ...withLabor.subtotals, labor: withLabor.subtotals.labor + wallNet },
+      net: withLabor.net + wallNet,
+      vat: withLabor.vat + wallVat,
+      gross: withLabor.gross + wallNet + wallVat,
+      summary: `Gesamt brutto: ${(withLabor.gross + wallNet + wallVat).toLocaleString('de-AT', { maximumFractionDigits: 0 })} € inkl. Holzständerwände.`,
+    };
+    orderList = [...orderList, ...wallItems.map(p => ({
+      supplier: 'Sonstiges' as const,
+      description: p.description,
+      quantity: p.quantity,
+      unit: p.unit,
+      unitPrice: p.unitPrice,
+      total: p.total,
+      notes: p.notes,
+    }))];
+  }
+
   return { materialOnly, withLabor, orderList, transport: transportPlan };
+}
+
+/** Erzeugt Pauschal-Positionen für Holzständerwände (50 €/m² Lohn) */
+function buildWallConstructionPositions(walls: WallConstruction[] | undefined, floorArea: number): CostPosition[] {
+  if (!walls || walls.length === 0) return [];
+  const holzWalls = walls.filter(w => ['holzstaender', 'kvh', 'bsh'].includes(w.type));
+  if (holzWalls.length === 0) return [];
+  // Grobe Schätzung: Wandfläche = Umfang × 2.7 m lichte Höhe
+  // Umfang aus Grundfläche: Annahme quadratisch → Seite = sqrt(A), Umfang = 4 × Seite
+  const sideLen = Math.sqrt(Math.max(floorArea, 1));
+  const perimeter = 4 * sideLen;
+  const wallHeightDefault = 2.7;
+  const wallArea = Math.round(perimeter * wallHeightDefault * holzWalls.length);
+  const unitPrice = 50; // €/m² Lohn pauschal
+  return [{
+    id: 'holzstaenderwand_lohn',
+    description: `Holzständerwand Lohn pauschal (${holzWalls.map(w => w.level).join(', ')}) — Schätzwert`,
+    category: 'Lohn',
+    quantity: wallArea,
+    unit: 'm²',
+    unitPrice,
+    total: wallArea * unitPrice,
+    notes: `Pauschal 50 €/m² Zimmerei-Lohn für Holzständerwand. Wand-Fläche aus Grundriss geschätzt (${wallArea} m²). Bitte prüfen!`,
+  }];
 }
