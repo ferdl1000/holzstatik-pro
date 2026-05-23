@@ -7,10 +7,11 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Key, Users, Shield, Save, Plus, Trash2, Eye, EyeOff, Database, Activity } from 'lucide-react';
+import { Settings, Key, Users, Shield, Save, Plus, Trash2, Eye, EyeOff, Database, Activity, Building2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { CompanyProfileEditor } from '@/components/admin/CompanyProfileEditor';
 
 interface SystemSetting {
   id: string;
@@ -28,7 +29,7 @@ interface UserProfile {
 }
 
 const Admin = () => {
-  const [activeSection, setActiveSection] = useState<'settings' | 'users' | 'system'>('settings');
+  const [activeSection, setActiveSection] = useState<'settings' | 'users' | 'system' | 'firma'>('settings');
   const [settings, setSettings] = useState<SystemSetting[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [newKey, setNewKey] = useState('');
@@ -121,6 +122,7 @@ const Admin = () => {
   const sections = [
     { key: 'settings' as const, label: 'API-Keys & Einstellungen', icon: Key },
     { key: 'users' as const, label: 'Benutzerverwaltung', icon: Users },
+    { key: 'firma' as const, label: 'Firma', icon: Building2 },
     { key: 'system' as const, label: 'Systemstatus', icon: Activity },
   ];
 
@@ -441,6 +443,9 @@ const Admin = () => {
             </SectionCard>
           </div>
         )}
+
+        {/* Firma */}
+        {activeSection === 'firma' && <CompanyProfileEditor />}
 
         {/* User Management */}
         {activeSection === 'users' && (

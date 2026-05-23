@@ -17,6 +17,9 @@ import type { JointSpec } from '@/lib/auto/standards';
 import type { CostPosition } from '@/lib/pricing';
 import type { AutoCostResultExt, RoofPartCostEntry } from '@/lib/auto/autoCost';
 import { autoComputeCosts } from '@/lib/auto/autoCost';
+import { applyVarianteToCosts, VARIANTE_LABELS, VARIANTE_DESCRIPTIONS } from '@/lib/pricing/varianten';
+import type { AngebotsVariante } from '@/lib/pricing/varianten';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -255,6 +258,9 @@ function RoofPartsOverview({ roofParts, byRoofPart }: RoofPartsOverviewProps) {
 
 export function BillOfMaterialsTab({ project, joints }: BillOfMaterialsTabProps) {
   const { toast } = useToast();
+
+  // Angebotsvariante
+  const [angebotsVariante, setAngebotsVariante] = useState<AngebotsVariante>('standard');
 
   // Per-position price overrides (id → unitPrice) for both estimate variants
   const [materialOverrides, setMaterialOverrides] = useState<Record<string, number>>({});
@@ -546,6 +552,77 @@ export function BillOfMaterialsTab({ project, joints }: BillOfMaterialsTabProps)
           {hasRoofParts && byRoofPart && project.roofParts && (
             <RoofPartsOverview roofParts={project.roofParts} byRoofPart={byRoofPart} />
           )}
+
+          {/* ── Angebotsvariante Schalter ── */}
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-sm font-medium shrink-0">Angebotsvariante:</span>
+            <Select value={angebotsVariante} onValueChange={v => setAngebotsVariante(v as AngebotsVariante)}>
+              <SelectTrigger className="w-64 h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(VARIANTE_LABELS) as AngebotsVariante[]).map(k => (
+                  <SelectItem key={k} value={k}>{VARIANTE_LABELS[k]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* ── 3-Varianten-Vergleichstabelle ── */}
+          {base && (() => {
+            const variants: AngebotsVariante[] = ['standard', 'premium', 'sicht'];
+            const variantCosts = variants.map(v => applyVarianteToCosts(base.withLabor, v));
+            // Collect unique position descriptions
+            const allPositions = Array.from(
+              new Set(base.withLabor.positions.map(p => p.description))
+            );
+            return (
+              <div className="mb-5 overflow-x-auto">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2 px-1">
+                  Angebotsvergleich — 3 Varianten (brutto inkl. Lohn + MwSt)
+                </h3>
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-muted/50">
+                      <th className="text-left px-3 py-2 font-semibold border-b">Position</th>
+                      {variants.map(v => (
+                        <th key={v} className="text-right px-3 py-2 font-semibold border-b whitespace-nowrap">
+                          {VARIANTE_LABELS[v]}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allPositions.map((desc, idx) => (
+                      <tr key={idx} className="hover:bg-muted/20 border-b last:border-b-0">
+                        <td className="px-3 py-1.5 text-foreground/80">{desc}</td>
+                        {variantCosts.map((vc, vi) => {
+                          const pos = vc.positions.find(p => p.description === desc);
+                          return (
+                            <td key={vi} className="text-right px-3 py-1.5 tabular-nums">
+                              {pos ? pos.total.toLocaleString('de-AT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {/* Totals row */}
+                    <tr className="bg-primary/10 font-bold">
+                      <td className="px-3 py-2">Gesamt brutto</td>
+                      {variantCosts.map((vc, vi) => (
+                        <td key={vi} className="text-right px-3 py-2 tabular-nums text-primary">
+                          {vc.gross.toLocaleString('de-AT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-muted-foreground mt-1 px-1">
+                  {VARIANTE_DESCRIPTIONS[angebotsVariante]}
+                </p>
+              </div>
+            );
+          })()}
 
           <Tabs defaultValue="orderlist">
             <TabsList className="mb-4">

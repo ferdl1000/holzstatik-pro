@@ -3,16 +3,19 @@ import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { Button } from '@/components/ui/button';
 import { FileText, Download, ClipboardList, TreePine, Shield, History, Loader2, FileCheck2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 import { downloadReport } from '@/lib/report/generator';
 import type { ReportExtras } from '@/lib/report/generator';
 import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
 import { computeTransportPlan } from '@/lib/auto/standards';
 import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { useAuditTrail } from '@/hooks/useAuditTrail';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { VARIANTE_LABELS, applyVarianteToCosts } from '@/lib/pricing/varianten';
+import type { AngebotsVariante } from '@/lib/pricing/varianten';
 
 interface ReportTabProps { project: Project; projectId?: string; }
 
@@ -22,9 +25,10 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
   const [laymanMode, setLaymanMode] = useState(false);
   const [includeCosts, setIncludeCosts] = useState(true);
   const [includeAudit, setIncludeAudit] = useState(true);
+  const [angebotsVariante, setAngebotsVariante] = useState<AngebotsVariante>('standard');
   const { toast } = useToast();
 
-  const handleLocalPdf = () => {
+  const handleLocalPdf = async () => {
     try {
       // Build calc results from project.calculations
       const calcResults = (project.calculations || []).map(c => ({
@@ -42,7 +46,7 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
         summary: `${c.memberName}: ${c.checks.length} Nachweise`,
       }));
 
-      const costs = includeCosts ? estimateCost({
+      const baseCosts = includeCosts ? estimateCost({
         members: project.members || [],
         roofArea: project.geometry ? project.geometry.length.value * (project.geometry.width.value / Math.cos((project.geometry.roofPitch.value * Math.PI) / 180)) : 0,
         groundArea: project.geometry ? project.geometry.length.value * project.geometry.width.value : 0,
@@ -50,6 +54,7 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
         membraneIds: ['mem_under', 'mem_vapor'],
         factors: DEFAULT_FACTORS,
       }) : undefined;
+      const costs = baseCosts ? applyVarianteToCosts(baseCosts, angebotsVariante) : undefined;
 
       // Build extras: joints come from pipeline result stored in project.calculations
       // (if the pipeline wrote joints into the first calculation entry's custom field),
@@ -73,8 +78,9 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
         planQuality: extracted?.planQuality,
       };
 
-      downloadReport(project, calcResults as never, costs, {
+      await downloadReport(project, calcResults as never, costs, {
         laymanMode, includeFormulas: !laymanMode, includeAuditTrail: includeAudit, includeCosts,
+        angebotsVariante,
       }, extras);
       toast({ title: 'PDF erstellt', description: 'Bericht wurde heruntergeladen.' });
     } catch (e) {
@@ -181,6 +187,19 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
             <div className="flex items-center gap-3">
               <Switch id="incAudit" checked={includeAudit} onCheckedChange={setIncludeAudit} />
               <Label htmlFor="incAudit" className="text-sm">Audit-Trail anhängen</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Label className="text-sm shrink-0">Angebotsvariante</Label>
+              <Select value={angebotsVariante} onValueChange={v => setAngebotsVariante(v as AngebotsVariante)}>
+                <SelectTrigger className="w-64 h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(VARIANTE_LABELS) as AngebotsVariante[]).map(k => (
+                    <SelectItem key={k} value={k}>{VARIANTE_LABELS[k]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <Button onClick={handleLocalPdf} size="lg" className="gap-2">

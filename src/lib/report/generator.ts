@@ -30,6 +30,8 @@ import type { CostEstimate } from '@/lib/pricing';
 import type { BeamResult } from '@/lib/calc';
 import type { JointSpec, TransportPlan } from '@/lib/auto/standards';
 import { suggestCeilingBeam, DECK_PLANKS } from '@/lib/auto/standards';
+import type { CompanyProfile } from '@/lib/branding/companyProfile';
+import { loadCompanyProfile } from '@/lib/branding/companyProfile';
 
 // ─── Extra types for new sections ─────────────────────────────────────────────
 
@@ -62,6 +64,8 @@ export interface ReportOptions {
   includeAuditTrail?: boolean;
   includeCosts?: boolean;
   signingPerson?: string;
+  companyProfile?: CompanyProfile;
+  angebotsVariante?: string;  // 'standard' | 'premium' | 'sicht'
 }
 
 export interface ReportExtras {
@@ -133,19 +137,52 @@ export function generateReport(
     y += boxH + 2;
     doc.setFontSize(10);
   };
+  const cp = options.companyProfile;
   const footer = () => {
     const total = doc.getNumberOfPages();
+    const today = new Date().toLocaleDateString('de-AT');
     for (let i = 1; i <= total; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(120);
       doc.text(`Seite ${i} von ${total}`, pageWidth - margin, doc.internal.pageSize.height - 8, { align: 'right' });
-      doc.text(`${project.name} — Vorbemessung`, margin, doc.internal.pageSize.height - 8);
+      const leftFooter = cp
+        ? `Erstellt von ${cp.name}, UID: ${cp.uid} | ${today}`
+        : `${project.name} — Vorbemessung`;
+      doc.text(leftFooter, margin, doc.internal.pageSize.height - 8);
       doc.setTextColor(0);
     }
   };
 
   // === Deckblatt ===
+
+  // Firmen-Logo links oben (wenn vorhanden)
+  if (cp?.logoBase64) {
+    try {
+      const ext = cp.logoBase64.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+      doc.addImage(cp.logoBase64, ext, margin, 10, 50, 18);
+    } catch { /* Logo-Einbindung optional */ }
+  }
+
+  // Firmen-Adresse rechts oben
+  if (cp) {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80);
+    const addrLines = [
+      cp.name,
+      cp.street,
+      `${cp.postalCode} ${cp.city}`,
+      cp.phone,
+      cp.email,
+      cp.uid ? `UID: ${cp.uid}` : '',
+    ].filter(Boolean);
+    addrLines.forEach((line, idx) => {
+      doc.text(line, pageWidth - margin, 12 + idx * 4.5, { align: 'right' });
+    });
+    doc.setTextColor(0);
+  }
+
   doc.setFontSize(24);
   doc.setFont('helvetica', 'bold');
   doc.text('Statische Vorbemessung', margin, 50);
@@ -165,8 +202,15 @@ export function generateReport(
       doc.text(`Seehöhe: ${project.address.elevation} m`, margin, 114);
     }
   }
+  const signingPerson = options.signingPerson || cp?.defaultSigningPerson || '—';
   doc.text(`Erstellt: ${new Date().toLocaleDateString('de-AT')}`, margin, 130);
-  doc.text(`Bearbeiter: ${options.signingPerson || '—'}`, margin, 136);
+  doc.text(`Bearbeiter: ${signingPerson}`, margin, 136);
+  if (options.angebotsVariante && options.angebotsVariante !== 'standard') {
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Angebotsvariante: ${options.angebotsVariante === 'premium' ? 'Premium (C30, +25 % Material)' : 'Sicht-Qualität (KVH Si, +60 % Material)'}`, margin, 144);
+    doc.setFont('helvetica', 'normal');
+  }
 
   doc.setFillColor(255, 240, 200);
   doc.rect(margin, 200, contentWidth, 40, 'F');
@@ -681,14 +725,22 @@ export function generateReport(
   return doc;
 }
 
-export function downloadReport(
+export async function downloadReport(
   project: Project,
   calcResults: BeamResult[] = [],
   costs?: CostEstimate,
   options?: ReportOptions,
   extras?: ReportExtras,
 ) {
-  const doc = generateReport(project, calcResults, costs, options, extras);
+  // Load company profile if not explicitly provided
+  const resolvedOptions: ReportOptions = { ...options };
+  if (!resolvedOptions.companyProfile) {
+    try {
+      resolvedOptions.companyProfile = await loadCompanyProfile();
+    } catch { /* optional */ }
+  }
+
+  const doc = generateReport(project, calcResults, costs, resolvedOptions, extras);
   const fileName = `Vorbemessung_${project.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
   doc.save(fileName);
 }

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { Project } from '@/types/project';
 import type { AutoPipelineResult, AutoAssumption } from '@/lib/auto/contracts';
 import { runAutoPipeline } from '@/lib/auto/autoPipeline';
@@ -40,11 +41,25 @@ function overallStatus(result: AutoPipelineResult): 'green' | 'yellow' | 'red' {
 
 export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [running, setRunning] = useState(false);
   const [progressStep, setProgressStep] = useState<number>(-1);
   const [result, setResult] = useState<AutoPipelineResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+
+  // Auto-trigger analysis when navigated from NewProject with ?autoAnalyze=true
+  useEffect(() => {
+    if (searchParams.get('autoAnalyze') === 'true') {
+      // Remove the param so a refresh won't re-trigger
+      setSearchParams(prev => {
+        prev.delete('autoAnalyze');
+        return prev;
+      }, { replace: true });
+      handleRun();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleRun() {
     setRunning(true);
