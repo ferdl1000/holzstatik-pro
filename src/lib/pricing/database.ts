@@ -26,53 +26,53 @@ export interface PriceItem {
  * Standard-Preisliste. Wird in DB seedingt, danach pro Anwender überschreibbar.
  */
 export const DEFAULT_PRICES: PriceItem[] = [
-  // === Konstruktionsholz ===
-  { id: 'kvh_c24_nsi',  category: 'timber', name: 'KVH C24, Nicht-Sicht-Qualität',  unit: 'm³', price: 540,  description: 'Konstruktionsvollholz Fichte, technisch getrocknet, gehobelt' },
-  { id: 'kvh_c24_si',   category: 'timber', name: 'KVH C24, Sicht-Qualität',         unit: 'm³', price: 720,  description: 'KVH mit gehobelter Oberfläche, gefast' },
-  { id: 'kvh_c30',      category: 'timber', name: 'KVH C30',                          unit: 'm³', price: 690,  description: 'Höhere Festigkeitsklasse' },
-  { id: 'bsh_gl24h',    category: 'timber', name: 'BSH GL24h (Leimbinder)',           unit: 'm³', price: 950,  description: 'Brettschichtholz homogen, Standardqualität' },
-  { id: 'bsh_gl28h',    category: 'timber', name: 'BSH GL28h',                        unit: 'm³', price: 1150, description: 'Hochfest, für große Spannweiten' },
-  { id: 'bsh_curved',   category: 'timber', name: 'BSH gebogen (Bogenbinder)',        unit: 'm³', price: 1750, description: 'Gebogene Leimbinder, Aufpreis ggü. gerade' },
-  { id: 'bsh_pitched',  category: 'timber', name: 'BSH Sattelträger',                 unit: 'm³', price: 1280, description: 'BSH mit konstanter Untergurt-Schräge' },
-  { id: 'lvl',          category: 'timber', name: 'Furnierschichtholz (Kerto/LVL)',   unit: 'm³', price: 1450, description: 'Sehr hohe Festigkeit, dünne Querschnitte möglich' },
-  { id: 'schalung',     category: 'timber', name: 'Schalung Fichte 24 mm',            unit: 'm²', price: 16,   description: 'Brettschalung' },
-  { id: 'osb_22',       category: 'timber', name: 'OSB-Platte 22 mm',                 unit: 'm²', price: 14,   description: 'OSB/3 als Beplankung' },
+  // === Konstruktionsholz === // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'kvh_c24_nsi',  category: 'timber', name: 'KVH C24, Nicht-Sicht-Qualität',  unit: 'm³', price: 510,  description: 'Konstruktionsvollholz Fichte, kammergetrocknet, gehobelt (NSi-Standard)' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'kvh_c24_si',   category: 'timber', name: 'KVH C24, Sicht-Qualität',         unit: 'm³', price: 690,  description: 'KVH mit gehobelter Oberfläche, gefast, Sicht-Qualität' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'kvh_c30',      category: 'timber', name: 'KVH C30',                          unit: 'm³', price: 640,  description: 'Höhere Festigkeitsklasse, begrenzte Verfügbarkeit' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'bsh_gl24h',    category: 'timber', name: 'BSH GL24h (Leimbinder)',           unit: 'm³', price: 920,  description: 'Brettschichtholz homogen, Standardqualität' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'bsh_gl28h',    category: 'timber', name: 'BSH GL28h',                        unit: 'm³', price: 1080, description: 'Hochfest, für große Spannweiten' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'bsh_curved',   category: 'timber', name: 'BSH gebogen (Bogenbinder)',        unit: 'm³', price: 1850, description: 'Gebogene Leimbinder, Aufpreis ggü. gerade (gestiegen 2026)' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'bsh_pitched',  category: 'timber', name: 'BSH Sattelträger',                 unit: 'm³', price: 1220, description: 'BSH mit konstanter Untergurt-Schräge' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'lvl',          category: 'timber', name: 'Furnierschichtholz (Kerto/LVL)',   unit: 'm³', price: 1380, description: 'Sehr hohe Festigkeit, dünne Querschnitte möglich' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'schalung',     category: 'timber', name: 'Schalung Fichte 24 mm',            unit: 'm²', price: 14,   description: '24mm Brettschalung Fichte ab Sägewerk' }, // Quelle: AT-Sägewerks-Großhandel 2026-Q1
+  { id: 'osb_22',       category: 'timber', name: 'OSB-Platte 22 mm',                 unit: 'm²', price: 18,   description: 'OSB/3 als Beplankung (Importpreis gestiegen)' }, // Quelle: AT-Baustoffhandel 2026-Q1
 
-  // === Dacheindeckung ===
-  { id: 'tile_clay',    category: 'covering', name: 'Tondachziegel inkl. Lattung',    unit: 'm²', price: 35,  description: 'Standard-Dachziegel' },
-  { id: 'tile_concrete',category: 'covering', name: 'Betondachsteine',                 unit: 'm²', price: 22,  description: 'Günstige Alternative zu Ton' },
-  { id: 'metal_falz',   category: 'covering', name: 'Stehfalz-Blechdach Zink',         unit: 'm²', price: 95,  description: 'Doppelstehfalz inkl. Schalung' },
-  { id: 'slate',        category: 'covering', name: 'Naturschiefer',                   unit: 'm²', price: 145, description: 'Sehr langlebig, hochwertig' },
-  { id: 'green_ext',    category: 'covering', name: 'Gründach extensiv',               unit: 'm²', price: 65,  description: 'Aufbau inkl. Drainage, Substrat, Sedum' },
-  { id: 'green_int',    category: 'covering', name: 'Gründach intensiv',               unit: 'm²', price: 180, description: 'Begehbar, intensive Bepflanzung' },
-  { id: 'pv',           category: 'covering', name: 'PV-Modul (zusätzlich)',           unit: 'm²', price: 220, description: 'Aufgeständert, inkl. Unterkonstruktion' },
+  // === Dacheindeckung === // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'tile_clay',    category: 'covering', name: 'Tondachziegel inkl. Lattung',    unit: 'm²', price: 42,  description: 'Standard-Tondachziegel inkl. Lattung und Konterlattung' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'tile_concrete',category: 'covering', name: 'Betondachsteine',                 unit: 'm²', price: 26,  description: 'Beton-Dachstein, günstige Alternative zu Ton' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'metal_falz',   category: 'covering', name: 'Stehfalz-Blechdach Zink',         unit: 'm²', price: 125, description: 'Doppelstehfalz Zink inkl. Schalung (Material + Verlegung)' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'slate',        category: 'covering', name: 'Naturschiefer',                   unit: 'm²', price: 165, description: 'Sehr langlebig, hochwertig' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'green_ext',    category: 'covering', name: 'Gründach extensiv',               unit: 'm²', price: 78,  description: 'Aufbau inkl. Drainage, Substrat, Sedum' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'green_int',    category: 'covering', name: 'Gründach intensiv',               unit: 'm²', price: 210, description: 'Begehbar, intensive Bepflanzung' }, // Quelle: AT-Dachdeckerpreise 2026-Q1
+  { id: 'pv',           category: 'covering', name: 'PV-Modul (zusätzlich)',           unit: 'm²', price: 195, description: 'Aufgeständert, inkl. Unterkonstruktion (PV-Preise gesunken)' }, // Quelle: AT-Photovoltaik-Marktpreis 2026-Q1
 
-  // === Dämmung ===
-  { id: 'ins_mw_200',   category: 'insulation', name: 'Mineralwolle 200 mm WLG 035',   unit: 'm²', price: 26, description: 'Zwischensparrendämmung' },
-  { id: 'ins_zell_240', category: 'insulation', name: 'Zellulose-Einblasdämmung 240 mm', unit: 'm²', price: 34, description: 'Ökologisch, gute Hitzeschutz' },
-  { id: 'ins_pir_140',  category: 'insulation', name: 'PIR Aufsparrendämmung 140 mm',  unit: 'm²', price: 58, description: 'Sehr gute Dämmwirkung pro mm' },
-  { id: 'ins_holzf',    category: 'insulation', name: 'Holzfaserdämmung 180 mm',       unit: 'm²', price: 48, description: 'Ökologisch, gute Schalldämmung' },
+  // === Dämmung === // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'ins_mw_200',   category: 'insulation', name: 'Mineralwolle 200 mm WLG 035',   unit: 'm²', price: 28, description: 'Zwischensparrendämmung Mineralwolle' }, // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'ins_zell_240', category: 'insulation', name: 'Zellulose-Einblasdämmung 240 mm', unit: 'm²', price: 38, description: 'Ökologisch, gute Hitzeschutz' }, // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'ins_pir_140',  category: 'insulation', name: 'PIR Aufsparrendämmung 140 mm',  unit: 'm²', price: 64, description: 'Sehr gute Dämmwirkung pro mm' }, // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'ins_holzf',    category: 'insulation', name: 'Holzfaserdämmung 180 mm',       unit: 'm²', price: 52, description: 'Ökologisch, gute Schalldämmung' }, // Quelle: AT-Baustoffhandel 2026-Q1
 
-  // === Folien ===
-  { id: 'mem_vapor',    category: 'membrane', name: 'Dampfbremse',                      unit: 'm²', price: 4,  description: 'PE/PA-Folie' },
-  { id: 'mem_under',    category: 'membrane', name: 'Unterspannbahn diffusionsoffen',   unit: 'm²', price: 6,  description: 'Klassisch' },
+  // === Folien === // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'mem_vapor',    category: 'membrane', name: 'Dampfbremse',                      unit: 'm²', price: 5,  description: 'PE/PA-Folie, Dampfbremse' }, // Quelle: AT-Baustoffhandel 2026-Q1
+  { id: 'mem_under',    category: 'membrane', name: 'Unterspannbahn diffusionsoffen',   unit: 'm²', price: 8,  description: 'Diffusionsoffene Unterspannbahn' }, // Quelle: AT-Baustoffhandel 2026-Q1
 
-  // === Verbinder ===
-  { id: 'screw_8x180',  category: 'fastener', name: 'Holzbauschraube 8×180',           unit: 'Stk', price: 0.35, description: 'Sparrenschraube' },
-  { id: 'screw_8x240',  category: 'fastener', name: 'Holzbauschraube 8×240',           unit: 'Stk', price: 0.55 },
-  { id: 'angle_bracket',category: 'fastener', name: 'Winkelverbinder 90×90×65',        unit: 'Stk', price: 4.5, description: 'Sparren-Pfette-Verbindung' },
-  { id: 'tie_down',     category: 'fastener', name: 'Sturmanker',                       unit: 'Stk', price: 8.5, description: 'Gegen Wind-Sog/Abheben' },
-  { id: 'bracket_glulam',category:'fastener', name: 'BSH-Auflagerschuh Stahl verzinkt', unit: 'Stk', price: 95,  description: 'Für Hauptträger-Auflager' },
+  // === Verbinder === // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
+  { id: 'screw_8x180',  category: 'fastener', name: 'Holzbauschraube 8×180',           unit: 'Stk', price: 0.42, description: 'Sparrenschraube' }, // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
+  { id: 'screw_8x240',  category: 'fastener', name: 'Holzbauschraube 8×240',           unit: 'Stk', price: 0.68 }, // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
+  { id: 'angle_bracket',category: 'fastener', name: 'Winkelverbinder 90×90×65',        unit: 'Stk', price: 5.20, description: 'Sparren-Pfette-Verbindung' }, // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
+  { id: 'tie_down',     category: 'fastener', name: 'Sturmanker',                       unit: 'Stk', price: 11,  description: 'Gegen Wind-Sog/Abheben' }, // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
+  { id: 'bracket_glulam',category:'fastener', name: 'BSH-Auflagerschuh Stahl verzinkt', unit: 'Stk', price: 115, description: 'Für Hauptträger-Auflager, Stahl verzinkt' }, // Quelle: AT-Holzbauverbinder-Großhandel 2026-Q1
 
-  // === Lohn ===
-  { id: 'labor_carp',   category: 'labor', name: 'Zimmermann-Stunde',                   unit: 'h',  price: 75 },
-  { id: 'labor_helper', category: 'labor', name: 'Helfer-Stunde',                       unit: 'h',  price: 48 },
-  { id: 'labor_assembly',category:'labor', name: 'Montage Dachstuhl (m² Grundfläche)',  unit: 'm²', price: 55, description: 'Pauschale Aufbauleistung KVH-Standard' },
-  { id: 'labor_glulam', category: 'labor', name: 'Montage BSH-Träger',                  unit: 'm',  price: 95, description: 'Aufpreis für Großkomponenten + Kran' },
+  // === Lohn === // Quelle: AT-Kollektivvertrag Zimmerei + Kalkulations-Verrechnungssatz 2026
+  { id: 'labor_carp',   category: 'labor', name: 'Zimmermann-Stunde',                   unit: 'h',  price: 82, description: 'Verrechnungssatz inkl. AG-Nebenkosten und Aufschläge' }, // Quelle: AT-Zimmerei-Verrechnungssatz 2026
+  { id: 'labor_helper', category: 'labor', name: 'Helfer-Stunde',                       unit: 'h',  price: 58, description: 'Helfer-Verrechnungssatz inkl. AG-Nebenkosten' }, // Quelle: AT-Zimmerei-Verrechnungssatz 2026
+  { id: 'labor_assembly',category:'labor', name: 'Montage Dachstuhl (m² Grundfläche)',  unit: 'm²', price: 68, description: 'Pauschale Aufbauleistung KVH-Standard' }, // Quelle: AT-Zimmerei-Pauschalkalkulation 2026
+  { id: 'labor_glulam', category: 'labor', name: 'Montage BSH-Träger',                  unit: 'm',  price: 120, description: 'Aufpreis für Großkomponenten + Kran-Anteil' }, // Quelle: AT-Zimmerei-Pauschalkalkulation 2026
 
-  // === Sonstiges ===
-  { id: 'crane',        category: 'other', name: 'Kran-Tag',                            unit: 'pauschal', price: 850, description: 'Mobilkran inkl. Bedienung' },
-  { id: 'transport',    category: 'other', name: 'Transport BSH',                        unit: 'pauschal', price: 420, description: 'Sondertransport > 12 m' },
+  // === Sonstiges === // Quelle: AT-Maschinenkosten 2026-Q1
+  { id: 'crane',        category: 'other', name: 'Kran-Tag',                            unit: 'pauschal', price: 980, description: 'Mobilkran inkl. Bediener, Tagessatz' }, // Quelle: AT-Maschinenkosten 2026-Q1
+  { id: 'transport',    category: 'other', name: 'Transport BSH',                        unit: 'pauschal', price: 480, description: 'Sondertransport > 12 m, Standard-Route AT' }, // Quelle: AT-Transportkosten 2026-Q1
 ];
 
 /** Aufschläge / Faktoren (vom Admin überschreibbar) */
@@ -90,9 +90,9 @@ export interface PricingFactors {
 }
 
 export const DEFAULT_FACTORS: PricingFactors = {
-  wasteTimber: 10,
-  laborMarkup: 40,
-  overhead: 20,
-  profit: 8,
-  vat: 20,
+  wasteTimber: 8,   // Quelle: AT-Zimmerei-Praxis 2026 (KVH-Verschnitt realistisch 6–10%)
+  laborMarkup: 45,  // Quelle: AT-Holzbau-Verbandskennwerte 2026 (Lohn-Material-Verhältnis)
+  overhead: 18,     // Quelle: AT-Zimmerei-Betriebskostenanalyse 2026
+  profit: 7,        // Quelle: AT-Baugewerbe-Marktübersicht 2026 (Unternehmergewinn)
+  vat: 20,          // Österreich Standard (unverändert)
 };

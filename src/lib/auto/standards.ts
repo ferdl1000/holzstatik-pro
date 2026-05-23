@@ -132,7 +132,7 @@ export function computeJoints(
         position: i * spacing,
         type: member.material?.includes('GL') ? 'Lasche' : 'Schräger Schnitt mit Bolzen',
         notes: `Gelenkstoß bei ${(i * spacing).toFixed(2)} m. Achtung: ohne Stütze in der Nähe, Moment-tragende Lasche zwingend erforderlich.`,
-        extraCost: member.material?.includes('GL') ? 380 : 85,
+        extraCost: member.material?.includes('GL') ? 420 : 95, // Quelle: AT-Holzbau-Verbandskennwerte 2026-Q1 (BSH-Lasche 420 €, KVH-Schäftung 95 €)
       });
     }
     return joints;
@@ -150,7 +150,7 @@ export function computeJoints(
         position: idealPos,
         type: 'Lasche',
         notes: `Stoß bei ${idealPos.toFixed(2)} m mit Moment-tragender Stoßlasche (keine Innenstütze vorhanden).`,
-        extraCost: 220,
+        extraCost: 220, // Moment-tragende Stoßlasche ohne Innenstütze (unveränderter Sonderfall)
       });
       continue;
     }
@@ -181,7 +181,7 @@ export function computeJoints(
       type: 'Stoß bei Momentennulldurchgang',
       notes: `Stoß bei ${stossPos.toFixed(2)} m = 0,21 × ${Math.min(fieldLeft, fieldRight).toFixed(2)} m vom Innenauflager (M ≈ 0). ` +
              `Gerader Stoß mit Stoßlasche, 2 Bolzen M12 pro Seite.`,
-      extraCost: 95,
+      extraCost: 105, // Quelle: AT-Holzbau-Verbandskennwerte 2026-Q1 (Stoßlasche + 2 Bolzen M12)
     });
   }
 
@@ -362,9 +362,9 @@ export function computeTransportPlan(members: TimberMember[]): TransportPlan {
   members.forEach((m, idx) => {
     const cat = transportCategoryFor(m);
     const extra = cat === 'standard' ? 0
-      : cat === 'oversize_S' ? 250
-      : cat === 'oversize_L' ? 1200
-      : 3500;
+      : cat === 'oversize_S' ? 320    // Quelle: AT-Transportkosten 2026-Q1 (Anzeige + ggf. Begleitfahrzeug)
+      : cat === 'oversize_L' ? 1450   // Quelle: AT-Transportkosten 2026-Q1 (Bewilligung ASFINAG)
+      : 4200;                          // Quelle: AT-Transportkosten 2026-Q1 (Schwertransport-Wochenend-Genehmigung)
     costByCat[cat].count++;
     costByCat[cat].cost += extra;
     if (cat !== 'standard') {
