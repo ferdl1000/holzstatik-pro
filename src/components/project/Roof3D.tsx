@@ -95,24 +95,27 @@ function buildPartBoxes(
   const isPultdach = form === 'pultdach';
   const isFlachdach = form === 'flachdach';
   const isWalm = form === 'walmdach' || form === 'krueppelwalmdach';
+  const isVordach = part.kind === 'vordach';
+  const wallOpacity = isVordach ? 0.12 : 0.25;
+  const wallColor = isVordach ? '#d0c4b0' : COLORS.wall;
 
   function add(b: BoxData) {
     out.push({ ...b, pos: [b.pos[0] + offsetX, b.pos[1], b.pos[2] + offsetZ] });
   }
 
   // === Wände (transparent) ===
-  add({ key: `${partId}-wall-front`, memberId: '', memberName: 'Wand', color: COLORS.wall,
+  add({ key: `${partId}-wall-front`, memberId: '', memberName: 'Wand', color: wallColor,
         pos: [0, eavesHeight / 2, -width / 2], rot: [0, 0, 0],
-        dims: [length, eavesHeight, 0.2], opacity: 0.25, transparent: true });
-  add({ key: `${partId}-wall-back`, memberId: '', memberName: 'Wand', color: COLORS.wall,
+        dims: [length, eavesHeight, 0.2], opacity: wallOpacity, transparent: true });
+  add({ key: `${partId}-wall-back`, memberId: '', memberName: 'Wand', color: wallColor,
         pos: [0, eavesHeight / 2, width / 2], rot: [0, 0, 0],
-        dims: [length, eavesHeight, 0.2], opacity: 0.25, transparent: true });
-  add({ key: `${partId}-wall-left`, memberId: '', memberName: 'Wand', color: COLORS.wall,
+        dims: [length, eavesHeight, 0.2], opacity: wallOpacity, transparent: true });
+  add({ key: `${partId}-wall-left`, memberId: '', memberName: 'Wand', color: wallColor,
         pos: [-length / 2, eavesHeight / 2, 0], rot: [0, 0, 0],
-        dims: [0.2, eavesHeight, width], opacity: 0.25, transparent: true });
-  add({ key: `${partId}-wall-right`, memberId: '', memberName: 'Wand', color: COLORS.wall,
+        dims: [0.2, eavesHeight, width], opacity: wallOpacity, transparent: true });
+  add({ key: `${partId}-wall-right`, memberId: '', memberName: 'Wand', color: wallColor,
         pos: [length / 2, eavesHeight / 2, 0], rot: [0, 0, 0],
-        dims: [0.2, eavesHeight, width], opacity: 0.25, transparent: true });
+        dims: [0.2, eavesHeight, width], opacity: wallOpacity, transparent: true });
 
   if (!members || members.length === 0) return out;
 
@@ -149,10 +152,11 @@ function buildPartBoxes(
     } else if (isFlachdach) {
       const spacing = length / qty;
       const flatPitch = 0.03; // 3° Gefälle
+      const flatY = eavesHeight; // flachdach: Sparren auf Traufhöhe
       for (let i = 0; i < qty; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         add({ key: `${partId}-spr-${sm.id}-${i}`, memberId: sm.id, memberName: sm.name,
-              pos: [x, ridgeHeight, 0], rot: [flatPitch, 0, 0],
+              pos: [x, flatY, 0], rot: [flatPitch, 0, 0],
               dims: [b, h, width], color });
       }
     } else if (isWalm) {
@@ -314,21 +318,33 @@ function RoofPlanes({ part, offsetX, offsetZ }: { part: RoofPart; offsetX: numbe
   };
 
   if (form === 'flachdach') {
+    // Vordach / Flachdach: horizontal, auf Traufhöhe
+    const flatY = eavesHeight; // für flachdach gilt eavesHeight = ridgeHeight
+    const isVordach = part.kind === 'vordach';
     return (
-      <mesh position={[offsetX, ridgeHeight, offsetZ]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[offsetX, flatY, offsetZ]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[length, width]} />
-        <meshStandardMaterial {...planeProps} />
+        <meshStandardMaterial
+          color={isVordach ? '#c09070' : COLORS.roof}
+          transparent
+          opacity={isVordach ? 0.30 : 0.22}
+          side={THREE.DoubleSide}
+        />
       </mesh>
     );
   }
 
   if (form === 'pultdach') {
+    // Pultdach: eine schräge Fläche, von eaves (Z=+width/2) zu ridge (Z=-width/2)
+    // Plane-Mittelpunkt: Y = eavesHeight + rise/2, Z = 0 (Mitte der Breite)
+    const pultAngle = Math.atan2(rise, width);
+    const hyp = Math.sqrt(width * width + rise * rise);
     return (
       <mesh
-        position={[offsetX, (eavesHeight + ridgeHeight) / 2, offsetZ]}
-        rotation={[Math.atan2(rise, width), 0, 0]}
+        position={[offsetX, eavesHeight + rise / 2, offsetZ]}
+        rotation={[pultAngle, 0, 0]}
       >
-        <planeGeometry args={[length, Math.sqrt(width * width + rise * rise)]} />
+        <planeGeometry args={[length, hyp]} />
         <meshStandardMaterial {...planeProps} />
       </mesh>
     );
@@ -627,12 +643,19 @@ export function Roof3D({ roofParts, utilizations = {} }: Roof3DProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showDimensions, setShowDimensions] = useState(true);
 
-  const maxL = roofParts.reduce((a, p) => Math.max(a, (p.geometry.length || 10) + Math.abs(p.positionX || 0) * 2), 10);
-  const maxW = roofParts.reduce((a, p) => Math.max(a, (p.geometry.width || 8) + Math.abs(p.positionY || 0) * 2), 8);
+  // Camera: compute bounding box across all parts for correct framing
+  const allMinX = Math.min(...roofParts.map(p => (p.positionX || 0) - (p.geometry.length || 10) / 2));
+  const allMaxX = Math.max(...roofParts.map(p => (p.positionX || 0) + (p.geometry.length || 10) / 2));
+  const allMinZ = Math.min(...roofParts.map(p => (p.positionY || 0) - (p.geometry.width || 8) / 2));
+  const allMaxZ = Math.max(...roofParts.map(p => (p.positionY || 0) + (p.geometry.width || 8) / 2));
+  const totalSpanX = Math.max(1, allMaxX - allMinX);
+  const totalSpanZ = Math.max(1, allMaxZ - allMinZ);
+  const centerX = (allMinX + allMaxX) / 2;
+  const centerZ = (allMinZ + allMaxZ) / 2;
   const maxH = roofParts.reduce((a, p) => Math.max(a, p.geometry.ridgeHeight || 6), 6);
-  const dist = Math.max(maxL, maxW) * 1.6;
-  const camTarget: [number, number, number] = [0, maxH / 2, 0];
-  const camPos: [number, number, number] = [dist, Math.max(maxH * 1.6, dist * 0.6), dist * 0.85];
+  const dist = Math.max(totalSpanX, totalSpanZ) * 1.8;
+  const camTarget: [number, number, number] = [centerX, maxH / 2, centerZ];
+  const camPos: [number, number, number] = [centerX + dist, Math.max(maxH * 1.6, dist * 0.6), centerZ + dist * 0.85];
 
   return (
     <Card className="overflow-hidden">

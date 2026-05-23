@@ -44,6 +44,11 @@ function sparrenAnzahl(length: number, spacing: number): number {
   return Math.ceil(length / spacing) * 2 + 2;
 }
 
+function sparrenAnzahlPultdach(length: number, spacing: number): number {
+  // Nur EINE Seite + je 1 Endgiebel-Sparren
+  return Math.ceil(length / spacing) + 1;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Haupt-Export
 // ────────────────────────────────────────────────────────────────────────────
@@ -88,8 +93,15 @@ export function autoGenerateMembers(
   const eavesH = geometry.eavesHeight.value;
   const ridgeH = geometry.ridgeHeight.value;
 
-  const sparrenLen = +sparrenLaenge(geometry).toFixed(2);
-  const sparrenCount = sparrenAnzahl(buildingLength, spacing);
+  const isPultdachForm = _roofType.form === 'pultdach';
+  // Pultdach: volle Breite als Sparrenlänge (nicht halbe), nur eine Seite
+  const sparrenLenRaw = isPultdachForm
+    ? Math.sqrt(buildingWidth * buildingWidth + (ridgeH - eavesH) * (ridgeH - eavesH))
+    : +sparrenLaenge(geometry).toFixed(2);
+  const sparrenLen = +sparrenLenRaw.toFixed(2);
+  const sparrenCount = isPultdachForm
+    ? sparrenAnzahlPultdach(buildingLength, spacing)
+    : sparrenAnzahl(buildingLength, spacing);
   const ridgeHeight = ridgeH - eavesH; // Höhe über Traufe
 
   const sysType = structuralSystem.type;
@@ -277,7 +289,9 @@ export function autoGenerateMembers(
   assumptions.push({
     field: 'sparren.crossSection',
     value: '8/16',
-    reason: 'Standard-KVH-Querschnitt 8/16 cm C24 für Sparren angenommen — wird durch Optimizer verifiziert.',
+    reason: isPultdachForm
+      ? `Standard-KVH-Querschnitt 8/16 cm C24 für Pultdach-Sparren angenommen (eine Seite, Länge ${sparrenLen} m über volle Gebäudebreite) — wird durch Optimizer verifiziert.`
+      : 'Standard-KVH-Querschnitt 8/16 cm C24 für Sparren angenommen — wird durch Optimizer verifiziert.',
     source: 'standard',
   });
 

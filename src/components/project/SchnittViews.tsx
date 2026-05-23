@@ -85,7 +85,7 @@ function WoodPattern({ id }: { id: string }) {
 // ════════════════════════════════════════════════════════════════════════════
 // 1) QUERSCHNITT
 // ════════════════════════════════════════════════════════════════════════════
-function Querschnitt({ geometry, members, coveringName }: { geometry: BuildingGeometry; members: TimberMember[]; coveringName?: string }) {
+function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: BuildingGeometry; members: TimberMember[]; coveringName?: string; roofForm?: string }) {
   const W = 800, H = 500;
   const pad = { l: 80, r: 80, t: 60, b: 70 };
 
@@ -108,18 +108,23 @@ function Querschnitt({ geometry, members, coveringName }: { geometry: BuildingGe
   const toSX = (mx: number) => pad.l + mx * scaleX;
   const toSY = (my: number) => pad.t + drawH - my * scaleY;
 
+  const isPult = roofForm === 'pultdach';
+  const isFlach = roofForm === 'flachdach';
+
   // Geometrie-Punkte
   const xL = 0, xR = bldW, xM = bldW / 2;
   const yGround = 0;
   const yEaves = eavesH;
   const yRidge = ridgeH;
+  const heightRise = ridgeH - eavesH;
 
   // Sparren: Länge am Schräg
   const halfSpan = bldW / 2;
-  const heightRise = ridgeH - eavesH;
-  const sparrenLen = Math.sqrt(halfSpan * halfSpan + heightRise * heightRise);
+  const sparrenLenSattel = Math.sqrt(halfSpan * halfSpan + heightRise * heightRise);
+  const sparrenLenPult = Math.sqrt(bldW * bldW + heightRise * heightRise);
+  const sparrenLen = isPult ? sparrenLenPult : sparrenLenSattel;
 
-  // Mittelpfetten auf halber Sparrenlänge
+  // Mittelpfetten auf halber Sparrenlänge (nur für Satteldach sinnvoll)
   const midFrac = 0.5;
   const yMid = eavesH + heightRise * midFrac;
   const xMidL = xM - halfSpan * midFrac;
@@ -144,53 +149,87 @@ function Querschnitt({ geometry, members, coveringName }: { geometry: BuildingGe
       <rect x={toSX(xL) - 12} y={toSY(yEaves)} width={12} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
       <rect x={toSX(xR)} y={toSY(yEaves)} width={12} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
 
-      {/* Stützen unter Mittelpfetten */}
-      <rect x={toSX(xMidL) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-      <rect x={toSX(xMidR) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+      {/* Stützen unter Mittelpfetten (nur Satteldach) */}
+      {!isPult && !isFlach && (
+        <>
+          <rect x={toSX(xMidL) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+          <rect x={toSX(xMidR) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+        </>
+      )}
 
       {/* Fußpfetten */}
       <rect x={toSX(xL) - 12} y={toSY(yEaves) - 10} width={28} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
       <rect x={toSX(xR) - 6} y={toSY(yEaves) - 10} width={28} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
 
-      {/* Mittelpfetten */}
-      <rect x={toSX(xMidL) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-      <rect x={toSX(xMidR) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+      {/* Mittelpfetten (nur Satteldach) */}
+      {!isPult && !isFlach && (
+        <>
+          <rect x={toSX(xMidL) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+          <rect x={toSX(xMidR) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+        </>
+      )}
 
-      {/* Sparren links */}
-      <line
-        x1={toSX(xL)} y1={toSY(yEaves)}
-        x2={toSX(xM)} y2={toSY(yRidge)}
-        stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-      />
-      {/* Sparren rechts */}
-      <line
-        x1={toSX(xR)} y1={toSY(yEaves)}
-        x2={toSX(xM)} y2={toSY(yRidge)}
-        stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-      />
+      {isPult ? (
+        /* Pultdach: ein Sparren von links-Traufe bis rechts-First */
+        <line
+          x1={toSX(xL)} y1={toSY(yEaves)}
+          x2={toSX(xR)} y2={toSY(yRidge)}
+          stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
+        />
+      ) : isFlach ? (
+        /* Flachdach: horizontale Linie */
+        <line
+          x1={toSX(xL)} y1={toSY(yEaves)}
+          x2={toSX(xR)} y2={toSY(yEaves)}
+          stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
+        />
+      ) : (
+        /* Satteldach: beide Seiten */
+        <>
+          <line
+            x1={toSX(xL)} y1={toSY(yEaves)}
+            x2={toSX(xM)} y2={toSY(yRidge)}
+            stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
+          />
+          <line
+            x1={toSX(xR)} y1={toSY(yEaves)}
+            x2={toSX(xM)} y2={toSY(yRidge)}
+            stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
+          />
+        </>
+      )}
 
-      {/* Firstpfette */}
-      <rect
-        x={toSX(xM) - 14} y={toSY(yRidge) - 12}
-        width={28} height={12}
-        fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2}
-      />
+      {/* Firstpfette (nur Satteldach / Pfettendach) */}
+      {!isPult && !isFlach && (
+        <rect
+          x={toSX(xM) - 14} y={toSY(yRidge) - 12}
+          width={28} height={12}
+          fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2}
+        />
+      )}
 
-      {/* Aufbau: Lattung + Eindeckung – links */}
-      {[0.2, 0.4, 0.6, 0.8].map(f => {
-        const lx = xL + (xM - xL) * f;
-        const ly = yEaves + (yRidge - yEaves) * f;
-        const nx2 = -Math.sin(pitchRad), ny2 = Math.cos(pitchRad); // senkrecht zur Schräge
-        return (
-          <g key={f}>
-            <line
-              x1={toSX(lx) + nx2 * lattH * scaleY} y1={toSY(ly) - ny2 * lattH * scaleY}
-              x2={toSX(lx) + nx2 * (lattH + deckH) * scaleY} y2={toSY(ly) - ny2 * (lattH + deckH) * scaleY}
-              stroke="#666" strokeWidth={1.2}
-            />
-          </g>
-        );
-      })}
+      {/* Aufbau: Lattung + Eindeckung */}
+      {!isFlach && (() => {
+        const fracs = isPult ? [0.2, 0.4, 0.6, 0.8] : [0.2, 0.4, 0.6, 0.8];
+        const startX = isPult ? xL : xL;
+        const endX = isPult ? xR : xM;
+        const startY = isPult ? yEaves : yEaves;
+        const endY = isPult ? yRidge : yRidge;
+        return fracs.map(f => {
+          const lx = startX + (endX - startX) * f;
+          const ly = startY + (endY - startY) * f;
+          const nx2 = -Math.sin(pitchRad), ny2 = Math.cos(pitchRad);
+          return (
+            <g key={f}>
+              <line
+                x1={toSX(lx) + nx2 * lattH * scaleY} y1={toSY(ly) - ny2 * lattH * scaleY}
+                x2={toSX(lx) + nx2 * (lattH + deckH) * scaleY} y2={toSY(ly) - ny2 * (lattH + deckH) * scaleY}
+                stroke="#666" strokeWidth={1.2}
+              />
+            </g>
+          );
+        });
+      })()}
 
       {/* Bemaßungen */}
       {/* Gebäudebreite unten */}
@@ -203,24 +242,27 @@ function Querschnitt({ geometry, members, coveringName }: { geometry: BuildingGe
       <Dim x1={toSX(bldW + 0.8)} y1={toSY(yGround)} x2={toSX(bldW + 0.8)} y2={toSY(yEaves)} label={fmt(eavesH)} flip />
 
       {/* Sparrenlänge entlang Sparren */}
-      <Dim
-        x1={toSX(xL)} y1={toSY(yEaves)}
-        x2={toSX(xM)} y2={toSY(yRidge)}
-        label={fmt(sparrenLen)} offset={16}
-      />
+      {!isFlach && (
+        <Dim
+          x1={toSX(isPult ? xL : xL)} y1={toSY(isPult ? yEaves : yEaves)}
+          x2={toSX(isPult ? xR : xM)} y2={toSY(isPult ? yRidge : yRidge)}
+          label={fmt(sparrenLen)} offset={16}
+        />
+      )}
 
-      {/* Stützenabstand (Mitte zu Aussenkante) */}
-      <Dim
-        x1={toSX(xL)} y1={toSY(yEaves - 0.15)}
-        x2={toSX(xMidL)} y2={toSY(yEaves - 0.15)}
-        label={fmt(xMidL - xL)} flip
-      />
+      {/* Stützenabstand (Mitte zu Aussenkante, nur Satteldach) */}
+      {!isPult && !isFlach && (
+        <Dim
+          x1={toSX(xL)} y1={toSY(yEaves - 0.15)}
+          x2={toSX(xMidL)} y2={toSY(yEaves - 0.15)}
+          label={fmt(xMidL - xL)} flip
+        />
+      )}
 
       {/* Dachneigung-Bogen + Text */}
       {(() => {
         const cx = toSX(xL), cy = toSY(yEaves);
         const r = 36;
-        const startAngle = 0;
         const endAngle = -pitchDeg;
         const toRad = (d: number) => (d * Math.PI) / 180;
         const ex = cx + r * Math.cos(toRad(endAngle));
@@ -238,15 +280,24 @@ function Querschnitt({ geometry, members, coveringName }: { geometry: BuildingGe
       })()}
 
       {/* Labels */}
-      <text x={toSX(xM)} y={toSY(yRidge) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
-      <text x={toSX(xMidL)} y={toSY(yMid) + 22} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfette</text>
+      {!isPult && !isFlach && (
+        <>
+          <text x={toSX(xM)} y={toSY(yRidge) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
+          <text x={toSX(xMidL)} y={toSY(yMid) + 22} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfette</text>
+        </>
+      )}
+      {isPult && (
+        <text x={toSX(xM)} y={toSY((yEaves + yRidge) / 2) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Pultdach-Sparren</text>
+      )}
       <text x={toSX(xL) - 6} y={toSY(yEaves) + 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="end">Fußpfette</text>
-      {coveringName && (
-        <text x={toSX(xM) - 60} y={toSY((yRidge + yEaves) / 2) - 10} fill="#555" fontSize={10} fontFamily="sans-serif" transform={`rotate(${-pitchDeg},${toSX(xM) - 60},${toSY((yRidge + yEaves) / 2) - 10})`}>{coveringName}</text>
+      {coveringName && !isFlach && (
+        <text x={toSX(isPult ? xM : xM) - 60} y={toSY((yRidge + yEaves) / 2) - 10} fill="#555" fontSize={10} fontFamily="sans-serif" transform={`rotate(${-pitchDeg},${toSX(isPult ? xM : xM) - 60},${toSY((yRidge + yEaves) / 2) - 10})`}>{coveringName}</text>
       )}
 
       {/* Titel */}
-      <text x={W / 2} y={18} fill="#333" fontSize={14} fontFamily="sans-serif" fontWeight="bold" textAnchor="middle">Querschnitt</text>
+      <text x={W / 2} y={18} fill="#333" fontSize={14} fontFamily="sans-serif" fontWeight="bold" textAnchor="middle">
+        {isPult ? 'Querschnitt (Pultdach)' : isFlach ? 'Querschnitt (Flachdach)' : 'Querschnitt'}
+      </text>
     </svg>
   );
 }
@@ -524,7 +575,7 @@ export function SchnittViews({ geometry, roofForm: _roofForm, members, coveringN
           </TabsList>
           <TabsContent value="querschnitt">
             <div className="overflow-x-auto">
-              <Querschnitt geometry={geometry} members={members} coveringName={coveringName} />
+              <Querschnitt geometry={geometry} members={members} coveringName={coveringName} roofForm={_roofForm} />
             </div>
           </TabsContent>
           <TabsContent value="laengsschnitt">

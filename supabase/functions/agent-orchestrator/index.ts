@@ -281,9 +281,17 @@ serve(async (req) => {
     }
 
     if (extracted.roofHints?.form) {
+      // Pultdach-Heuristik: wenn KI 'satteldach' liefert aber pitch < 12° → Pultdach
+      const mainRoofPart = (extracted.roofParts as Array<any> | undefined)?.[0];
+      const mainPitch = mainRoofPart?.pitch ?? (extracted.roofHints as any)?.pitch ?? 0;
+      let detectedForm = (extracted.roofHints as any).form as string;
+      if (detectedForm === 'satteldach' && mainPitch > 0 && mainPitch < 12) {
+        detectedForm = 'pultdach';
+        log.push(`ℹ Dachform-Korrektur: satteldach → pultdach (pitch ${mainPitch}° < 12°)`);
+      }
       projectUpdate.roofType = {
-        form: extracted.roofHints.form,
-        confidence: extracted.roofHints.confidence || 0.5,
+        form: detectedForm,
+        confidence: (extracted.roofHints as any).confidence || 0.5,
         alternatives: [], userConfirmed: false,
       };
     }

@@ -7,6 +7,7 @@ import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 import {
   Sparkles, Loader2, ChevronDown, ChevronUp,
   CheckCircle2, AlertTriangle, XCircle,
@@ -17,7 +18,7 @@ interface AutoAnalysisTabProps {
   onUpdate?: (updates: Partial<Project>) => void;
 }
 
-const PROGRESS_STEPS = [
+const PIPELINE_STEPS = [
   'Geometrie ableiten…',
   'Bauteile generieren…',
   'Lasten ermitteln…',
@@ -44,6 +45,7 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [running, setRunning] = useState(false);
   const [progressStep, setProgressStep] = useState<number>(-1);
+  const [progressLabel, setProgressLabel] = useState<string>('');
   const [result, setResult] = useState<AutoPipelineResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
@@ -61,19 +63,122 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function applyResult(pipelineResult: AutoPipelineResult) {
+    setResult(pipelineResult);
+
+    if (onUpdate) {
+      onUpdate({
+        geometry: pipelineResult.geometry.geometry,
+        roofType: pipelineResult.roofType.roofType,
+        structuralSystem: pipelineResult.structuralSystem.structuralSystem,
+        members: pipelineResult.calculations.optimizedMembers,
+        loadCases: pipelineResult.loads.loadCases,
+        ...(pipelineResult.roofParts ? { roofParts: pipelineResult.roofParts } : {}),
+      });
+    }
+
+    toast({
+      title: 'Komplett-Analyse abgeschlossen',
+      description: pipelineResult.summary,
+    });
+
+    // Toast für automatische Korrekturen
+    const corrections = pipelineResult.allAssumptions.filter(
+      (a) => typeof a.reason === 'string' && a.reason.includes('Korrektur:'),
+    );
+    if (corrections.length > 0) {
+      toast({
+        title: `${corrections.length} automatische Korrektur${corrections.length > 1 ? 'en' : ''} aus Plausibilitätsprüfung`,
+        description: 'Siehe Annahmen-Liste für Details.',
+      });
+    }
+  }
+
   async function handleRun() {
     setRunning(true);
     setError(null);
     setResult(null);
-    setProgressStep(0);
+    setProgressStep(-1);
+    setProgressLabel('');
 
     try {
-      // Simulate step progress while the pipeline runs.
-      // We advance every 600 ms up to step 4; step 5 (Fertig) is set after await.
+      const projectId = (project as Project & { id?: string }).id;
+
+      // ── Schritt 1: KI-Analyse (agent-orchestrator) für jeden Plan ──────────
+      if (projectId) {
+        const { data: docs } = await supabase
+          .from('documents')
+          .select('id, status, file_name')
+          .eq('project_id', projectId);
+
+        if (docs && docs.length > 0) {
+          for (let i = 0; i < docs.length; i++) {
+            const doc = docs[i];
+            setProgressLabel(`KI-Analyse Plan ${i + 1}/${docs.length}: ${doc.file_name} …`);
+            try {
+              const { error: orchError } = await supabase.functions.invoke('agent-orchestrator', {
+                body: { projectId, documentId: doc.id },
+              });
+              if (orchError) {
+                console.warn(`KI-Analyse fehlgeschlagen für ${doc.file_name}:`, orchError);
+                // Nicht abbrechen — mit nächstem Plan / bestehenden Daten weitermachen
+              }
+            } catch (orchEx) {
+              console.warn(`KI-Analyse exception für ${doc.file_name}:`, orchEx);
+            }
+          }
+
+          // ── Schritt 2: Projekt-Daten nach KI-Analyse neu laden ──────────────
+          setProgressLabel('Projekt-Daten neu laden …');
+          const { data: refreshed } = await supabase
+            .from('projects')
+            .select('*')
+            .eq('id', projectId)
+            .single();
+
+          if (refreshed) {
+            const refreshedProject: Project = {
+              ...project,
+              ...(refreshed.project_data ?? {}),
+              id: projectId,
+            } as Project;
+
+            // ── Schritt 3: Pipeline mit refreshed-Daten ──────────────────────
+            setProgressStep(0);
+            setProgressLabel(PIPELINE_STEPS[0]);
+
+            let step = 0;
+            const ticker = setInterval(() => {
+              step = Math.min(step + 1, 4);
+              setProgressStep(step);
+              setProgressLabel(PIPELINE_STEPS[step]);
+            }, 700);
+
+            const pipelineResult = await runAutoPipeline({
+              project: refreshedProject,
+              sparrenSpacing: 0.8,
+              useOptimizer: true,
+            });
+
+            clearInterval(ticker);
+            setProgressStep(5);
+            setProgressLabel(PIPELINE_STEPS[5]);
+
+            await applyResult(pipelineResult);
+            return;
+          }
+        }
+      }
+
+      // ── Fallback: Pipeline direkt auf aktuelles project (keine Pläne / kein projectId) ─
+      setProgressStep(0);
+      setProgressLabel(PIPELINE_STEPS[0]);
+
       let step = 0;
       const ticker = setInterval(() => {
         step = Math.min(step + 1, 4);
         setProgressStep(step);
+        setProgressLabel(PIPELINE_STEPS[step]);
       }, 700);
 
       const pipelineResult = await runAutoPipeline({
@@ -84,25 +189,9 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
 
       clearInterval(ticker);
       setProgressStep(5);
+      setProgressLabel(PIPELINE_STEPS[5]);
 
-      setResult(pipelineResult);
-
-      // Persist back into Project
-      if (onUpdate) {
-        onUpdate({
-          geometry: pipelineResult.geometry.geometry,
-          roofType: pipelineResult.roofType.roofType,
-          structuralSystem: pipelineResult.structuralSystem.structuralSystem,
-          members: pipelineResult.calculations.optimizedMembers,
-          loadCases: pipelineResult.loads.loadCases,
-          ...(pipelineResult.roofParts ? { roofParts: pipelineResult.roofParts } : {}),
-        });
-      }
-
-      toast({
-        title: 'Komplett-Analyse abgeschlossen',
-        description: pipelineResult.summary,
-      });
+      await applyResult(pipelineResult);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -179,7 +268,15 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
         <Card>
           <CardContent className="pt-6">
             <div className="space-y-2">
-              {PROGRESS_STEPS.map((step, i) => (
+              {/* KI-Phase: progressStep ist -1, zeige aktuellen Label prominent */}
+              {progressStep < 0 && progressLabel && (
+                <div className="flex items-center gap-2 text-sm text-primary font-medium">
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                  {progressLabel}
+                </div>
+              )}
+              {/* Pipeline-Phase: Schritt-Liste */}
+              {progressStep >= 0 && PIPELINE_STEPS.map((step, i) => (
                 <div
                   key={step}
                   className={`flex items-center gap-2 text-sm transition-colors ${

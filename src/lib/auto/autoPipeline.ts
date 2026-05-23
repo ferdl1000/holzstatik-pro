@@ -14,6 +14,7 @@ import { autoComputeLoads } from './autoLoads';
 import { autoCalculateAllMembers } from './autoCalculate';
 import { autoComputeCosts } from './autoCost';
 import { sanitizeRoofForm, sanitizeStructuralSystemType } from './sanitize';
+import { validateLoop } from './validator';
 
 // ── Helper: Wähle ein sinnvolles Tragsystem basierend auf Dachteil-Geometrie ──
 function defaultStructuralSystemForPart(rp: RoofPart): StructuralSystem {
@@ -66,6 +67,30 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const sparrenSpacing = input.sparrenSpacing ?? 0.8;
   const ceilings = input.ceilings ?? project.ceilings;
 
+  // ── 0. Pre-Validation: DN-Marker + Plausibilitätsprüfung VOR der Ableitung ──
+  // Läuft als Loop (max 3 Iterationen) bis alle Werte konsistent sind.
+  const preValidation = validateLoop(
+    project,
+    project.geometry ?? {
+      length:      { value: 0, unit: 'm', confidence: 0, source: 'assumed' },
+      width:       { value: 0, unit: 'm', confidence: 0, source: 'assumed' },
+      ridgeHeight: { value: 0, unit: 'm', confidence: 0, source: 'assumed' },
+      eavesHeight: { value: 0, unit: 'm', confidence: 0, source: 'assumed' },
+      roofPitch:   { value: 0, unit: '°', confidence: 0, source: 'assumed' },
+      spans: [],
+      axes: [],
+      isSymmetric: true,
+      confidence: 0,
+      userConfirmed: false,
+    },
+    project.roofParts,
+    3,
+  );
+  // Korrigierte Werte als Basis für die restliche Pipeline verwenden
+  const validatedGeometry  = preValidation.geometry;
+  const validatedRoofParts = preValidation.roofParts;
+  const preValidationAssumptions: AutoAssumption[] = preValidation.allCorrections;
+
   // ── 1. Geometrie ableiten ────────────────────────────────────────────────
 
   // Sanitize RoofType (ungültiger/fehlender form-Wert → satteldach)
@@ -91,7 +116,11 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     });
   }
 
-  const derivedGeometry = autoDeriveGeometry(project.geometry, roofTypeRaw);
+  // Verwende pre-validierte Geometrie (DN-Marker-Korrekturen bereits eingearbeitet)
+  const derivedGeometry = autoDeriveGeometry(
+    validatedGeometry.confidence > 0 ? validatedGeometry : project.geometry,
+    roofTypeRaw,
+  );
 
   // ── 2. Tragsystem mit Defaults + Sanitize ───────────────────────────────
   const sysSanitized = sanitizeStructuralSystemType(project.structuralSystem?.type);
@@ -129,7 +158,9 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
 
   // ── 3. Bauteile generieren ───────────────────────────────────────────────
   // Multi-Dachteil-Modus: wenn project.roofParts vorhanden, für jeden Teil separat generieren
-  const hasMultiParts = Array.isArray(project.roofParts) && project.roofParts.length > 0;
+  // Verwende pre-validierte RoofParts (pitch etc. bereits korrigiert)
+  const roofPartsSource = validatedRoofParts ?? project.roofParts;
+  const hasMultiParts = Array.isArray(roofPartsSource) && roofPartsSource.length > 0;
 
   let membersResult: import('./contracts').AutoMembersResult;
   let updatedRoofParts: RoofPart[] | undefined;
@@ -139,7 +170,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     const allAssumptionsParts: AutoAssumption[] = [];
     const descParts: string[] = [];
 
-    updatedRoofParts = project.roofParts!.map((rp) => {
+    updatedRoofParts = roofPartsSource!.map((rp) => {
       const partGeom = roofPartToGeometry(rp);
       const derivedPartGeom = autoDeriveGeometry(partGeom, {
         form: rp.form,
@@ -226,14 +257,32 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     ...(project.coveringType ? { coveringType: project.coveringType } : {}),
   });
 
+  // ── 6b. Post-Pipeline-Validation: Final-Check der abgeleiteten Geometrie ──
+  // Prüft nochmals ob DN-Marker-Werte in der abgeleiteten Geometrie korrekt sind.
+  const postValidation = validateLoop(
+    project,
+    derivedGeometry.geometry,
+    updatedRoofParts,
+    2, // max 2 weitere Iterationen nach der Pipeline
+  );
+  // Korrigierte Geometrie in derivedGeometry einpflegen (immutable swap)
+  const finalGeometry = postValidation.allCorrections.length > 0
+    ? { ...derivedGeometry, geometry: postValidation.geometry }
+    : derivedGeometry;
+  const finalRoofParts = postValidation.allCorrections.length > 0
+    ? (postValidation.roofParts ?? updatedRoofParts)
+    : updatedRoofParts;
+
   // ── 7. Alle Annahmen zusammenfassen ──────────────────────────────────────
   const allAssumptions: AutoAssumption[] = [
-    ...derivedGeometry.assumptions,
+    ...preValidationAssumptions,
+    ...finalGeometry.assumptions,
     ...structuralSystemAssumptions,
     ...addressAssumptions,
     ...membersResult.assumptions,
     ...loadsResult.assumptions,
     ...calculationsResult.assumptions,
+    ...postValidation.allCorrections,
   ];
 
   // ── 8. Confidence-Score ──────────────────────────────────────────────────
@@ -251,13 +300,13 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       : 0;
 
   // ── 9. Summary ───────────────────────────────────────────────────────────
-  const roofPitch = derivedGeometry.geometry.roofPitch?.value ?? 0;
+  const roofPitch = finalGeometry.geometry.roofPitch?.value ?? 0;
   const sparrenCount = membersResult.members.filter((m) => m.type === 'sparren' || m.type === 'nebentraeger').length;
   const maxEta = calculationsResult.members.length > 0
     ? Math.max(...calculationsResult.members.map((m) => m.maxUtilization))
     : 0;
   const brutto = costsResult.withLabor?.gross ?? costsResult.materialOnly?.gross ?? 0;
-  const roofPartsLabel = hasMultiParts ? `, ${project.roofParts!.length} Dachteile` : '';
+  const roofPartsLabel = hasMultiParts ? `, ${roofPartsSource!.length} Dachteile` : '';
   const ceilingsLabel = ceilings && ceilings.length > 0
     ? `, +${ceilings.length} Holzbalkendecke${ceilings.length > 1 ? 'n' : ''} (${ceilings.map(c => c.level).join('/')})`
     : '';
@@ -269,7 +318,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
 
   // ── 10. Rückgabe ─────────────────────────────────────────────────────────
   return {
-    geometry: derivedGeometry,
+    geometry: finalGeometry,
     roofType: { roofType: roofTypeRaw, assumptions: structuralSystemAssumptions.filter((a) => a.field === 'roofType') },
     structuralSystem: { structuralSystem: structuralSystemRaw, assumptions: structuralSystemAssumptions.filter((a) => a.field === 'structuralSystem') },
     members: membersResult,
@@ -279,7 +328,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     allAssumptions,
     confidenceScore,
     summary,
-    ...(updatedRoofParts ? { roofParts: updatedRoofParts } : {}),
+    ...(finalRoofParts ? { roofParts: finalRoofParts } : {}),
     ...(membersResult.joints && membersResult.joints.length > 0 ? { joints: membersResult.joints } : {}),
   };
 }
