@@ -28,6 +28,16 @@ Antworte AUSSCHLIESSLICH mit validem JSON. KEIN erklärender Text, KEINE Markdow
 
 AUFGABE: Erstelle eine schnelle Inventur aller relevanten Elemente im Plan.
 
+=== DACHNEIGUNG — HÖCHSTE PRIORITÄT ===
+Suche auf JEDER Seite nach "DN X°" Beschriftungen (österreichische Norm für Dachneigung).
+- DN steht für "Dachneigung" und ist IMMER gefolgt von einer Zahl und dem Gradzeichen °
+- Beispiele: "DN 10°", "DN 22°", "DN 35°", "DN 8°"
+- Diese Beschriftungen stehen typischerweise: im Schnitt (Querschnitt, Längsschnitt), neben Dachflächen, auf Dachlinien
+- Bei Pultdächern steht DN NUR EINMAL pro Dachfläche
+- Bei Satteldächern steht DN auf BEIDEN Seiten (oft gleicher Wert)
+- WICHTIG: Selbst wenn du keine "DN"-Abkürzung siehst, suche nach kleinen Zahlen mit "°" neben Dachlinien!
+- Wenn du z.B. "10°" oder "10 Grad" siehst ohne DN-Präfix → trotzdem als DN-Marker aufnehmen!
+
 SUCHE EXPLIZIT NACH:
 - "DN X°" Beschriftungen (Dachneigung) — diese stehen oft 5–10× im Schnitt!
 - "ÜBERDACHUNG", "Vordach", "Tordach", "Carport" Texte (= separate Dachteile)
@@ -585,9 +595,15 @@ async function analyzeDocumentMultiStage(
   });
 
   // --- Stage 3: Validation ---
+  // Stage1-DN-Marker explizit in Stage3-Prompt einbetten damit KI sie nicht übersieht
+  const stage1DnSummary = (stage1.dn_marker as Array<{value: number; evidence?: string}> | undefined ?? [])
+    .map(m => `DN ${m.value}° (${m.evidence ?? 'aus Inventur'})`).join(', ');
+  const dnHint = stage1DnSummary
+    ? `\n\n=== KRITISCH: Stage-1 hat folgende DN-Marker gefunden: ${stage1DnSummary} ===\nDiese DN-Werte MÜSSEN in den roofParts pitch-Werten vorkommen!`
+    : '';
   const stage3Text = await geminiVision({
     systemPrompt: STAGE3_PROMPT,
-    userPrompt: `Stage-2-Ergebnis:\n${JSON.stringify(stage2, null, 2)}\n\nValidiere und korrigiere gegen den Plan "${fileName}".`,
+    userPrompt: `Stage-2-Ergebnis:\n${JSON.stringify(stage2, null, 2)}${dnHint}\n\nValidiere und korrigiere gegen den Plan "${fileName}".`,
     fileBase64: base64,
     mimeType: 'application/pdf',
     jsonMode: true,
@@ -605,7 +621,16 @@ async function analyzeDocumentMultiStage(
   stage3._analysisMethod = 'multi-stage-3';
 
   // ── DN-Marker aus Stage 1 explizit auf roofParts mappen ──────────────────
-  const dnMarkers = (stage1.dn_marker as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
+  // Fallback-Kette: Stage1.dn_marker → Stage2.dn_markers → Stage3.dn_markers
+  const dnMarkersStage1 = (stage1.dn_marker as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
+  const dnMarkersStage2 = (stage2.dn_markers as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
+  const dnMarkersStage3 = (stage3.dn_markers as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
+  // Nutze Stage1 als Primärquelle, dann Stage2, dann Stage3 (letzte Chance)
+  const dnMarkers = dnMarkersStage1.length > 0
+    ? dnMarkersStage1
+    : dnMarkersStage2.length > 0
+      ? dnMarkersStage2
+      : dnMarkersStage3;
   if (dnMarkers.length > 0 && Array.isArray(stage3.roofParts)) {
     const parts = stage3.roofParts as Array<Record<string, unknown>>;
     for (const marker of dnMarkers) {
