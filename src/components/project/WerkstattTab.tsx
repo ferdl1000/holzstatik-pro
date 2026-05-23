@@ -1,21 +1,27 @@
 /**
- * WerkstattTab – CNC-Export, Schnittliste, Montage-Reihenfolge
+ * WerkstattTab – CNC-Export, SEMA-Export, Schnittliste, Montage-Reihenfolge
  *
  * Sektionen:
+ *  0. SEMA-Export         – IFC, DXF, Komplett-ZIP für Zimmerei-CAD
  *  1. BTL/BTLX-Export    – Hundegger CNC-Maschinen
  *  2. Schnittliste        – FFD-optimiert, pro Material+Querschnitt
  *  3. Montage-Reihenfolge – Schritt-Liste mit Dauer und Kran-Hinweis
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Wrench, Download, Clock, AlertTriangle, CheckCircle2, Layers, ChevronsRight } from 'lucide-react';
-import { downloadBTL } from '@/lib/cnc/btl-export';
+import { Wrench, Download, Clock, AlertTriangle, CheckCircle2, Layers, ChevronsRight, PackageOpen, FileCode2, Box } from 'lucide-react';
+import { downloadBTL, exportToBTL } from '@/lib/cnc/btl-export';
 import { optimizeCutting } from '@/lib/cnc/schnittliste';
 import { montageReihenfolge, gesamtdauer } from '@/lib/cnc/montagereihenfolge';
+import { downloadIFC, downloadIFC2x3 } from '@/lib/sema/ifc-export';
+import { downloadDXF } from '@/lib/sema/dxf-export';
+import { buildProjectZip, downloadZip } from '@/lib/sema/zip-export';
+import { downloadStatikCSV } from '@/lib/sema/wallner-mild-export';
+import { supabase } from '@/integrations/supabase/client';
 
 interface WerkstattTabProps {
   project: Project;
@@ -69,10 +75,51 @@ function CutBarViz({ bar, stockLen }: { bar: { cuts: { memberName: string; lengt
 
 export function WerkstattTab({ project }: WerkstattTabProps) {
   const members = project.members ?? [];
+  const [zipLoading, setZipLoading] = useState(false);
 
   const cuttingStocks = useMemo(() => optimizeCutting(members), [members]);
   const montageSchritte = useMemo(() => montageReihenfolge(members), [members]);
   const totalDauer = useMemo(() => gesamtdauer(montageSchritte), [montageSchritte]);
+
+  // ── Komplett-ZIP ──────────────────────────────────────────────────────────
+  async function handleZipDownload() {
+    setZipLoading(true);
+    try {
+      // Pläne aus Supabase Storage laden
+      const pdfBlobs: { name: string; blob: Blob }[] = [];
+      const { data: docs } = await supabase
+        .from('documents')
+        .select('file_name, file_path')
+        .eq('project_id', project.id);
+
+      if (docs) {
+        for (const doc of docs) {
+          const { data } = await supabase.storage
+            .from('plan-documents')
+            .download(doc.file_path);
+          if (data) {
+            pdfBlobs.push({ name: doc.file_name, blob: data });
+          }
+        }
+      }
+
+      // BTL erzeugen
+      const btl = exportToBTL(members, project.name);
+
+      const blob = await buildProjectZip({
+        project,
+        members,
+        pdfBlobs,
+        btl,
+      });
+
+      downloadZip(blob, project.name);
+    } catch (err) {
+      console.error('ZIP-Export Fehler:', err);
+    } finally {
+      setZipLoading(false);
+    }
+  }
 
   if (members.length === 0) {
     return (
@@ -85,6 +132,84 @@ export function WerkstattTab({ project }: WerkstattTabProps) {
 
   return (
     <div className="p-4 space-y-6 max-w-5xl mx-auto">
+
+      {/* ── 0. SEMA-Export ──────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Box className="h-4 w-4 text-purple-500" />
+            SEMA-Export (CAD-Import)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Exportiert alle {members.length} Bauteile als BIM/CAD-Datei.
+            Direkt importierbar in <strong>SEMA</strong>, <strong>Allplan</strong>, <strong>AutoCAD</strong> und <strong>Revit</strong>.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadIFC(project, members)}
+              className="gap-2"
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              IFC4 herunterladen
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadIFC2x3(project, members)}
+              className="gap-2"
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              IFC2x3 für SEMA 12+
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadDXF(project, members)}
+              className="gap-2"
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              DXF 3D herunterladen
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => downloadStatikCSV(project, members, project.loadCases ?? [])}
+              className="gap-2"
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              Statik-Export (Wallner-Mild)
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleZipDownload}
+              disabled={zipLoading}
+              className="gap-2"
+            >
+              <PackageOpen className="h-3.5 w-3.5" />
+              {zipLoading ? 'Wird erstellt…' : 'Komplett-ZIP'}
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1 pt-1">
+            <Badge variant="outline" className="text-xs">IFC4</Badge>
+            <Badge variant="outline" className="text-xs">IFC2x3</Badge>
+            <Badge variant="outline" className="text-xs">DXF R12</Badge>
+            <Badge variant="outline" className="text-xs">SEMA 12+</Badge>
+            <Badge variant="outline" className="text-xs">Allplan</Badge>
+            <Badge variant="outline" className="text-xs">Wallner-Mild</Badge>
+          </div>
+          <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
+            <p><strong>IFC4:</strong> SEMA 19+, Allplan, Revit</p>
+            <p><strong>IFC2x3:</strong> SEMA 12–18, AutoCAD Architecture, ArchiCAD</p>
+            <p><strong>DXF:</strong> Universell (jede CAD-Software, auch SEMA importiert es als 3D-Solids)</p>
+            <p><strong>Statik-CSV:</strong> Wallner-Mild, BTS Holzbau, Statik4U (Spalten-Mapping nötig)</p>
+            <p><strong>Komplett-ZIP</strong> enthält IFC4, IFC2x3, DXF, Statik-CSV, BTL (Hundegger) und alle Original-Pläne.</p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── 1. BTL/BTLX-Export ─────────────────────────────────────────────── */}
       <Card>
