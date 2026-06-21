@@ -44,6 +44,113 @@ serve(async (req) => {
     const log: string[] = [];
     const errors: string[] = [];
 
+    // ── Konsens-Mechanismus ────────────────────────────────────────────────────
+    /**
+     * Vergleicht zwei (oder mehr) Analyse-Pässe auf kritischen Feldern.
+     * Gibt Konsens-Extraktion + Liste unsicherer Felder zurück.
+     */
+    function buildConsensus(
+      passes: Record<string, any>[],
+    ): { consensus: Record<string, any>; uncertainFields: string[] } {
+      const uncertainFields: string[] = [];
+      // Nimm den Pass mit höchster overallConfidence als Basis
+      const base = passes.reduce((best, p) =>
+        (p.overallConfidence ?? 0) >= (best.overallConfidence ?? 0) ? p : best,
+      passes[0]);
+      const consensus: Record<string, any> = { ...base };
+
+      // --- Pitch je roofPart ---
+      const rpArrays = passes.map(p => (p.roofParts as Array<any> | undefined) ?? []);
+      const maxParts = Math.max(...rpArrays.map(a => a.length));
+      if (maxParts > 0) {
+        const consensusParts: Array<any> = [];
+        for (let i = 0; i < maxParts; i++) {
+          const part = { ...((base.roofParts as Array<any>)?.[i] ?? {}) };
+          // pitch abstimmen
+          const pitchValues = rpArrays
+            .map(a => a[i]?.pitch)
+            .filter((v): v is number => typeof v === 'number');
+          if (pitchValues.length >= 2) {
+            const majority = pitchValues[0];
+            const allSame = pitchValues.every(v => Math.abs(v - majority) <= 2);
+            if (!allSame) {
+              uncertainFields.push(`roofParts[${i}].pitch`);
+              // Höchste Einzel-Konfidenz gewinnt
+              let bestConf = -1; let bestVal = majority;
+              rpArrays.forEach(a => {
+                const rp = a[i];
+                if (rp && typeof rp.pitch === 'number' && (rp.confidence ?? 0) > bestConf) {
+                  bestConf = rp.confidence ?? 0; bestVal = rp.pitch;
+                }
+              });
+              part.pitch = bestVal;
+            }
+          }
+          // form abstimmen
+          const formValues = rpArrays.map(a => a[i]?.form).filter(Boolean) as string[];
+          if (formValues.length >= 2) {
+            const allSameForm = formValues.every(v => v === formValues[0]);
+            if (!allSameForm) uncertainFields.push(`roofParts[${i}].form`);
+          }
+          consensusParts.push(part);
+        }
+        // Anzahl Dachteile — stimmen Pässe überein?
+        const partCounts = rpArrays.map(a => a.length);
+        if (partCounts.some(c => c !== partCounts[0])) {
+          uncertainFields.push('roofParts.length');
+        }
+        consensus.roofParts = consensusParts;
+      }
+
+      // --- geometry: length / width ---
+      for (const dimLabel of ['länge', 'gebäudelänge', 'breite', 'gebäudebreite']) {
+        const vals = passes.map(p => {
+          const dims = (p.dimensions as Array<any> | undefined) ?? [];
+          return dims.find((d: any) => d.label?.toLowerCase().includes(dimLabel))?.value as number | undefined;
+        }).filter((v): v is number => typeof v === 'number');
+        if (vals.length >= 2 && !vals.every(v => Math.abs(v - vals[0]) < 0.5)) {
+          uncertainFields.push(`geometry.${dimLabel}`);
+        }
+      }
+
+      // --- covering.type ---
+      const coveringTypes = passes
+        .map(p => (p.covering as any)?.type)
+        .filter((v): v is string => !!v && v !== 'unbekannt');
+      if (coveringTypes.length >= 2 && !coveringTypes.every(v => v === coveringTypes[0])) {
+        uncertainFields.push('covering.type');
+      }
+
+      // --- structuralSystem.type ---
+      const structTypes = passes
+        .map(p => (p.structureHints as any)?.type)
+        .filter((v): v is string => !!v);
+      if (structTypes.length >= 2 && !structTypes.every(v => v === structTypes[0])) {
+        uncertainFields.push('structuralSystem.type');
+      }
+
+      consensus.uncertainFields = [...new Set(uncertainFields)];
+      return { consensus, uncertainFields: [...new Set(uncertainFields)] };
+    }
+
+    /**
+     * Prüft, ob ein Konsens-Pass nötig ist.
+     * Nicht nötig wenn: DN-Marker eindeutig (gleicher Wert ≥ 2× im Text) UND confidence ≥ 0.7.
+     */
+    function needsConsensusPass(
+      extracted: Record<string, any>,
+      facts: { dnMarkers: Array<{ value: number }> },
+    ): boolean {
+      // DN eindeutig: mind. 2 Marker und alle gleich
+      const dnVals = facts.dnMarkers.map(m => m.value);
+      const dnUnique = [...new Set(dnVals)];
+      const dnClear = dnVals.length >= 2 && dnUnique.length === 1;
+      const confOk = (extracted.overallConfidence as number ?? 0) >= 0.7;
+      if (dnClear && confOk) return false;   // harte Fakten eindeutig → kein 2. Call
+      // Kein DN gefunden ODER widersprüchliche DN ODER niedrige Konfidenz → Konsens nötig
+      return true;
+    }
+
     // ── Hilfsfunktion: Konfidenz-gestütztes Merge zweier Extraktionen ──────────
     function mergeExtracted(base: Record<string, any>, overlay: Record<string, any>): Record<string, any> {
       const merged: Record<string, any> = { ...base };
@@ -123,6 +230,49 @@ serve(async (req) => {
       } else {
         log.push(`✗ Second-Pass fehlgeschlagen: ${secondResult.error} — behalte First-Pass`);
         errors.push(`Second-Pass: ${secondResult.error}`);
+      }
+    }
+
+    // === 1b2. Konsens-Pass (bei unsicheren Werten) ===
+    // Deterministischen Text-Parser-Ergebnis aus dem bereits extrahierten Text nutzen,
+    // um zu prüfen, ob DN-Marker eindeutig sind (kein extra API-Call nötig).
+    {
+      // DN-Marker aus dem First-Pass-Extrakt holen (bereits durch agent-document ermittelt)
+      const dn_markers_raw = (extracted.dn_markers as Array<{ value: number }> | undefined) ?? [];
+      const factsDnMarkers = dn_markers_raw.length > 0
+        ? dn_markers_raw
+        : ((extracted.dimensions as Array<{ label?: string; value: number }> | undefined) ?? [])
+            .filter(d => d.label?.toLowerCase().includes('dachneigung') || d.label?.toLowerCase().includes('neigung'))
+            .map(d => ({ value: d.value }));
+
+      if (docResult.ok && needsConsensusPass(extracted, { dnMarkers: factsDnMarkers })) {
+        log.push(`[${new Date().toISOString()}] ▶ Konsens-Pass: DN unklar (${factsDnMarkers.map(m => m.value + '°').join(', ') || 'kein DN'}) oder Konfidenz < 0.7 — starte 2. Analyse…`);
+        const consensusResult = await safeCallAgent('agent-document', {
+          projectId, documentId, retryWith: 'gemini-2.5-flash', focusOnMissing: false,
+        });
+        if (consensusResult.ok) {
+          const consensusExtracted = consensusResult.data.extracted as Record<string, any>;
+          const { consensus, uncertainFields } = buildConsensus([extracted, consensusExtracted]);
+          extracted = consensus;
+          const safeCount = Object.keys(consensus).filter(k => !uncertainFields.includes(k)).length;
+          log.push(`[${new Date().toISOString()}] ✓ Konsens: ${safeCount} Felder sicher, ${uncertainFields.length} unsicher markiert (${uncertainFields.join(', ') || '–'})`);
+          await supabase.from('audit_log').insert({
+            project_id: projectId, agent: 'Dokumenten-Agent (Konsens)',
+            action: `Konsens-Pass abgeschlossen`,
+            field: 'documents',
+            reason: `Unsichere Felder: ${uncertainFields.join(', ') || '–'}`,
+            new_value: `Konsens-Konfidenz: ${((extracted.overallConfidence as number || 0) * 100).toFixed(0)}%, unsicher: ${uncertainFields.length} Felder`,
+            user_initiated: false,
+          });
+        } else {
+          log.push(`✗ Konsens-Pass fehlgeschlagen: ${consensusResult.error} — behalte First-Pass`);
+          errors.push(`Konsens-Pass: ${consensusResult.error}`);
+          // Felder trotzdem als unsicher markieren
+          extracted.uncertainFields = extracted.uncertainFields ?? [];
+        }
+      } else if (docResult.ok) {
+        log.push(`✓ Konsens-Pass übersprungen: DN eindeutig (${factsDnMarkers.map(m => m.value + '°').join(', ')}) und Konfidenz ≥ 0.7 — kein Extra-Gemini-Call`);
+        extracted.uncertainFields = extracted.uncertainFields ?? [];
       }
     }
 
@@ -306,8 +456,100 @@ serve(async (req) => {
       };
     }
 
-    // roofParts: multi-roof-part support
-    const extractedRoofParts = (extracted.roofParts as Array<any> | undefined);
+    // ═══════════════════════════════════════════════════════════════════════
+    // MULTI-ROOF-GARANTIE: textParser-Fakten erzwingen Anzahl + Neigungen
+    // ═══════════════════════════════════════════════════════════════════════
+    // Die deterministischen Fakten (parsedFacts) aus dem Text-Parser sind die
+    // WAHRHEIT für: Anzahl Vordächer (ueberdachungCount), Dachneigungen (dnMarkers).
+    // Die KI kann ein Dach "vergessen" — der Text-Parser nicht.
+    const facts = (extracted.parsedFacts as any) || {};
+    const factUeberCount: number = facts.ueberdachungCount ?? 0;
+    const factUeberLabels: string[] = facts.ueberdachungLabels ?? [];
+    const factDnMarkers: Array<{ value: number }> = facts.dnMarkers ?? [];
+
+    let extractedRoofParts = (extracted.roofParts as Array<any> | undefined) ?? [];
+
+    // Geometrie-Fallback aus dimensions (für synthetische Dachteile)
+    const dimsArr = (extracted.dimensions || []) as Array<{label?: string; value: number}>;
+    const findDim = (l: string) => dimsArr.find(d => d.label?.toLowerCase().includes(l))?.value ?? 0;
+    const baseLen = findDim('länge') || findDim('gebäudelänge') || 10;
+    const baseWid = findDim('breite') || findDim('gebäudebreite') || 8;
+    const baseRidge = findDim('first') || 6;
+    const baseEaves = findDim('trauf') || 4;
+
+    // GARANTIE 1: Wenn KI gar keine roofParts lieferte → mindestens Hauptdach erzeugen
+    if (extractedRoofParts.length === 0) {
+      const mainPitch = factDnMarkers[0]?.value ?? 30;
+      extractedRoofParts = [{
+        id: 'main', kind: 'main', label: 'Hauptdach',
+        form: mainPitch <= 5 ? 'flachdach' : (mainPitch < 12 ? 'pultdach' : 'satteldach'),
+        positionX: 0, positionY: 0,
+        length: baseLen, width: baseWid, ridgeHeight: baseRidge, eavesHeight: baseEaves,
+        pitch: mainPitch, ridgeDirection: 'x', confidence: 0.5,
+        notes: 'Synthetisch erzeugt (KI lieferte kein Dachteil)',
+      }];
+      log.push('⚠ Multi-Roof-Garantie: Kein Dachteil von KI — Hauptdach synthetisch erzeugt');
+    }
+
+    // GARANTIE 2: Vordach-Anzahl erzwingen. Wenn Text-Parser N Überdachungen fand,
+    // aber KI weniger Vordächer lieferte → fehlende synthetisch ergänzen.
+    const kiVordachCount = extractedRoofParts.filter((rp: any) => rp.kind === 'vordach' || rp.kind === 'carport').length;
+    if (factUeberCount > kiVordachCount) {
+      const missing = factUeberCount - kiVordachCount;
+      for (let i = 0; i < missing; i++) {
+        const label = factUeberLabels[kiVordachCount + i] || `Vordach ${kiVordachCount + i + 1}`;
+        // Vordach-Neigung: eigener DN-Marker wenn vorhanden, sonst flach
+        const vPitch = factDnMarkers[extractedRoofParts.length]?.value ?? 0;
+        // Position: alternierend links/rechts vom Hauptdach
+        const side = i % 2 === 0 ? 1 : -1;
+        extractedRoofParts.push({
+          id: `vordach_${kiVordachCount + i + 1}`,
+          kind: 'vordach',
+          label,
+          form: vPitch <= 5 ? 'flachdach' : 'pultdach',
+          positionX: 0,
+          positionY: side * (baseWid / 2 + 2),
+          length: baseLen,
+          width: 3,                       // typische Vordach-Tiefe
+          ridgeHeight: baseEaves,
+          eavesHeight: Math.max(2.5, baseEaves - 0.5),
+          pitch: vPitch,
+          ridgeDirection: 'x',
+          confidence: 0.6,
+          notes: `Aus Text-Parser erzwungen (${label})`,
+        });
+      }
+      log.push(`⚠ Multi-Roof-Garantie: Text fand ${factUeberCount} Überdachung(en), KI nur ${kiVordachCount} → ${missing} synthetisch ergänzt`);
+    }
+
+    // GARANTIE 3: Dachneigungen pro Dachteil aus DN-Markern erzwingen.
+    // Wenn mehrere unterschiedliche DN-Werte → den Dachteilen zuordnen (index-basiert).
+    if (factDnMarkers.length > 0) {
+      const uniquePitches = [...new Set(factDnMarkers.map(m => m.value))];
+      extractedRoofParts.forEach((rp: any, idx: number) => {
+        // Marker-Zuordnung: bei genau 1 eindeutigem Wert → alle Hauptdächer kriegen ihn;
+        // bei mehreren → index-basiert (Hauptdach = erster, Vordach = nächster)
+        let assignedPitch: number;
+        if (uniquePitches.length === 1) {
+          // Ein einziger DN-Wert im Plan: nur Hauptdach kriegt ihn, Vordach bleibt wie erkannt/flach
+          assignedPitch = rp.kind === 'main' ? uniquePitches[0] : (rp.pitch ?? 0);
+        } else {
+          // Mehrere DN-Werte: index-basiert zuordnen
+          assignedPitch = factDnMarkers[idx]?.value ?? rp.pitch ?? uniquePitches[0];
+        }
+        if (typeof assignedPitch === 'number' && assignedPitch >= 0) {
+          if (rp.pitch !== assignedPitch) {
+            rp.pitch = assignedPitch;
+          }
+          // Form-Konsistenz erzwingen
+          if (assignedPitch <= 5) rp.form = 'flachdach';
+          else if (assignedPitch < 12 && rp.form === 'satteldach') rp.form = 'pultdach';
+        }
+      });
+      log.push(`✓ Multi-Roof-Garantie: DN-Marker [${uniquePitches.join('°, ')}°] auf ${extractedRoofParts.length} Dachteil(e) angewandt`);
+    }
+
+    // roofParts in projectUpdate schreiben
     if (extractedRoofParts && extractedRoofParts.length > 0) {
       projectUpdate.roofParts = extractedRoofParts.map((rp: any) => ({
         id: rp.id,
@@ -317,20 +559,29 @@ serve(async (req) => {
         positionX: rp.positionX ?? 0,
         positionY: rp.positionY ?? 0,
         geometry: {
-          length: rp.length ?? 0,
-          width: rp.width ?? 0,
-          ridgeHeight: rp.ridgeHeight ?? 0,
-          eavesHeight: rp.eavesHeight ?? 0,
-          pitch: rp.pitch ?? 0,
-          ridgeDirection: rp.ridgeDirection ?? 'x',
+          length: rp.length ?? rp.geometry?.length ?? 0,
+          width: rp.width ?? rp.geometry?.width ?? 0,
+          ridgeHeight: rp.ridgeHeight ?? rp.geometry?.ridgeHeight ?? 0,
+          eavesHeight: rp.eavesHeight ?? rp.geometry?.eavesHeight ?? 0,
+          pitch: rp.pitch ?? rp.geometry?.pitch ?? 0,
+          ridgeDirection: rp.ridgeDirection ?? rp.geometry?.ridgeDirection ?? 'x',
         },
         members: [],
         confidence: rp.confidence ?? 0.5,
         ...(rp.notes ? { notes: rp.notes } : {}),
       }));
-      log.push(`✓ RoofParts: ${projectUpdate.roofParts.length} Dachteil(e) erkannt (${projectUpdate.roofParts.map((r: any) => r.label).join(', ')})`);
+      const partSummary = projectUpdate.roofParts.map((r: any) => `${r.label} (${r.form} ${r.geometry.pitch}°)`).join(', ');
+      log.push(`✓ RoofParts FINAL: ${projectUpdate.roofParts.length} Dachteil(e) — ${partSummary}`);
+
+      // Validierung: Anzahl plausibel?
+      const expectedMin = 1 + factUeberCount;
+      if (projectUpdate.roofParts.length < expectedMin) {
+        const warn = `Dachteil-Anzahl ${projectUpdate.roofParts.length} < erwartet ${expectedMin} (1 Haupt + ${factUeberCount} Vordächer)`;
+        errors.push(warn);
+        log.push(`⚠ ${warn}`);
+      }
     } else {
-      log.push('ℹ RoofParts: Nur Hauptdach (kein multi-part-Ergebnis aus Extraktion)');
+      log.push('ℹ RoofParts: Nur Hauptdach (kein multi-part-Ergebnis)');
     }
 
     // ceilings: Decken durchreichen (mit Konstruktionstyp)
@@ -415,6 +666,13 @@ serve(async (req) => {
       });
     } else {
       log.push(`ℹ Eindeckung: ${extractedCovering?.type === 'unbekannt' ? 'Typ unbekannt – Default tile_clay wird angenommen' : 'Kein Eindeckungstyp erkannt'}`);
+    }
+
+    // uncertainFields aus Konsens in projectUpdate speichern (UI kann rot markieren)
+    const uncertainFields = (extracted.uncertainFields as string[] | undefined) ?? [];
+    if (uncertainFields.length > 0) {
+      projectUpdate.uncertainFields = uncertainFields;
+      log.push(`⚠ Unsichere Felder gespeichert: ${uncertainFields.join(', ')}`);
     }
 
     await supabase.from('projects')

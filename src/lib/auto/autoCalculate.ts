@@ -12,7 +12,7 @@
  */
 
 import type { TimberMember, BuildingGeometry } from '@/types/project';
-import type { AutoCalculationResult, AutoAssumption } from './contracts';
+import type { AutoCalculationResult, AutoAssumption, DimensioningVariant } from './contracts';
 import { optimizeBeam } from '@/lib/calc/timber/optimizer';
 import { optimizeGlulam } from '@/lib/calc/timber/optimizer';
 import { calculateColumn } from '@/lib/calc/timber/column';
@@ -397,6 +397,36 @@ export function autoCalculateAllMembers(
           ? `Profil-Reihe ausgeschöpft – kein BSH-Standardprofil ausreichend. ${optResult.reasoning}`
           : optResult.reasoning;
 
+        // ── Varianten berechnen (wirtschaftlich + sicher) ────────────────────
+        const wirtschaftlichVariant: DimensioningVariant = {
+          b: currentSection.b,
+          h: currentSection.h,
+          label: currentSection.label,
+          eta: currentResult.maxUtilization,
+          status: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
+        };
+
+        let sicherVariant: DimensioningVariant;
+        const nextForSicher = nextLargerProfile({ b: currentSection.b, h: currentSection.h }, true);
+        if (nextForSicher && upscaleStatus !== 'red') {
+          const sicherResult = calculateGlulam({
+            ...glulamBaseInput,
+            b: nextForSicher.b,
+            h: nextForSicher.h,
+            timberClass: currentClass,
+          });
+          sicherVariant = {
+            b: nextForSicher.b,
+            h: nextForSicher.h,
+            label: nextForSicher.label,
+            eta: sicherResult.maxUtilization,
+            status: sicherResult.overallStatus,
+          };
+        } else {
+          // Kein größeres Profil → sicher = wirtschaftlich
+          sicherVariant = { ...wirtschaftlichVariant };
+        }
+
         const entry: MemberCalcEntry = {
           member,
           section: currentSection,
@@ -410,6 +440,7 @@ export function autoCalculateAllMembers(
             status: c.status,
             explanation: c.explanation,
           })),
+          variants: { wirtschaftlich: wirtschaftlichVariant, sicher: sicherVariant },
         };
         resultMembers.push(entry);
 
@@ -516,6 +547,36 @@ export function autoCalculateAllMembers(
           ? `Profil-Reihe ausgeschöpft – kein KVH-Standardprofil ausreichend. Empfehlung: auf BSH wechseln. ${optResult.reasoning}`
           : optResult.reasoning;
 
+        // ── Varianten berechnen (wirtschaftlich + sicher) ──────────────────
+        const wirtschaftlichVariantKVH: DimensioningVariant = {
+          b: currentSection.b,
+          h: currentSection.h,
+          label: currentSection.label,
+          eta: currentResult.maxUtilization,
+          status: upscaleStatus === 'red' ? 'red' : currentResult.overallStatus,
+        };
+
+        let sicherVariantKVH: DimensioningVariant;
+        const nextForSicherKVH = nextLargerProfile({ b: currentSection.b, h: currentSection.h }, false);
+        if (nextForSicherKVH && upscaleStatus !== 'red') {
+          const sicherResultKVH = calculateBeam({
+            ...beamBaseInput,
+            b: nextForSicherKVH.b,
+            h: nextForSicherKVH.h,
+            timberClass: currentClass,
+          });
+          sicherVariantKVH = {
+            b: nextForSicherKVH.b,
+            h: nextForSicherKVH.h,
+            label: nextForSicherKVH.label,
+            eta: sicherResultKVH.maxUtilization,
+            status: sicherResultKVH.overallStatus,
+          };
+        } else {
+          // Kein größeres Profil oder Profil-Reihe ausgeschöpft → sicher = wirtschaftlich
+          sicherVariantKVH = { ...wirtschaftlichVariantKVH };
+        }
+
         const entry: MemberCalcEntry = {
           member,
           section: currentSection,
@@ -529,6 +590,7 @@ export function autoCalculateAllMembers(
             status: c.status,
             explanation: c.explanation,
           })),
+          variants: { wirtschaftlich: wirtschaftlichVariantKVH, sicher: sicherVariantKVH },
         };
         resultMembers.push(entry);
 

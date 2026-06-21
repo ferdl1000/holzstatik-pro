@@ -86,6 +86,8 @@ export interface Project {
   wallConstructions?: WallConstruction[];
   /** Brandschutz: Gebäudeklasse + REI-Nachweise aus Plan */
   fireProtection?: FireProtection;
+  /** Dimensionierungsmodus: wirtschaftlich (η ≤ 0.95) oder sicher (nächstes Profil, η ≤ 0.85) */
+  dimensioningMode?: 'wirtschaftlich' | 'sicher';
 }
 
 // ===== Documents =====

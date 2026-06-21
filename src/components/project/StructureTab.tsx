@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { captureCorrection } from '@/lib/learning/captureCorrection';
 
 interface StructureTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -39,6 +40,22 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
   // Allow manual setup when no roof/sys is detected
   const selectRoofForm = (form: RoofFormType) => {
     if (!onUpdate) return;
+    // Korrektur erfassen wenn KI-Erkennung vorhanden war
+    if (roof && !roof.userConfirmed && roof.form && roof.form !== form) {
+      captureCorrection({
+        field: 'roofForm',
+        wrongValue: String(roof.form),
+        correctValue: String(form),
+        triggerContext: project.name || undefined,
+        reason: 'Manuelle Dachform-Korrektur im Struktur-Tab',
+      });
+      toast({
+        title: `Dachform gewählt: ${ROOF_FORM_LABELS[form]}`,
+        description: 'Korrektur als Lern-Regel gespeichert — wird bei ähnlichen Plänen angewandt',
+      });
+    } else {
+      toast({ title: `Dachform gewählt: ${ROOF_FORM_LABELS[form]}` });
+    }
     onUpdate({
       roofType: {
         form, confidence: roof?.confidence ?? 1.0,
@@ -46,12 +63,21 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
         userConfirmed: true,
       },
     });
-    toast({ title: `Dachform gewählt: ${ROOF_FORM_LABELS[form]}` });
     setShowSetRoof(false);
   };
 
   const selectSystem = (type: StructuralSystemType) => {
     if (!onUpdate) return;
+    // Korrektur erfassen wenn KI-Erkennung vorhanden war
+    if (sys && !sys.userConfirmed && sys.type && sys.type !== type) {
+      captureCorrection({
+        field: 'structuralSystemType',
+        wrongValue: String(sys.type),
+        correctValue: String(type),
+        triggerContext: project.name || undefined,
+        reason: 'Manuelle Tragsystem-Korrektur im Struktur-Tab',
+      });
+    }
     onUpdate({
       structuralSystem: {
         type, confidence: sys?.confidence ?? 1.0,

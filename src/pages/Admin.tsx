@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Key, Users, Shield, Save, Plus, Trash2, Eye, EyeOff, Database, Activity, Building2 } from 'lucide-react';
+import { Settings, Key, Users, Shield, Save, Plus, Trash2, Eye, EyeOff, Database, Activity, Building2, Brain } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
@@ -28,10 +28,22 @@ interface UserProfile {
   roles: string[];
 }
 
+interface ErkennungsRegel {
+  id: string;
+  field: string;
+  wrong_value: string | null;
+  correct_value: string;
+  trigger_context: string | null;
+  reason: string | null;
+  applied_count: number;
+  created_at: string;
+}
+
 const Admin = () => {
-  const [activeSection, setActiveSection] = useState<'settings' | 'users' | 'system' | 'firma'>('settings');
+  const [activeSection, setActiveSection] = useState<'settings' | 'users' | 'system' | 'firma' | 'lernregeln'>('settings');
   const [settings, setSettings] = useState<SystemSetting[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [lernRegeln, setLernRegeln] = useState<ErkennungsRegel[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
   const [newDesc, setNewDesc] = useState('');
@@ -59,8 +71,17 @@ const Admin = () => {
           roles: roles?.filter(r => r.user_id === p.user_id).map(r => r.role) || [],
         })));
       }
+    } else if (activeSection === 'lernregeln') {
+      const { data } = await supabase.from('erkennungs_regeln').select('*').order('created_at', { ascending: false });
+      setLernRegeln((data as ErkennungsRegel[]) || []);
     }
     setLoading(false);
+  }
+
+  async function deleteLernRegel(id: string) {
+    await supabase.from('erkennungs_regeln').delete().eq('id', id);
+    setLernRegeln(prev => prev.filter(r => r.id !== id));
+    toast({ title: 'Lern-Regel gelöscht' });
   }
 
   async function addSetting() {
@@ -123,6 +144,7 @@ const Admin = () => {
     { key: 'settings' as const, label: 'API-Keys & Einstellungen', icon: Key },
     { key: 'users' as const, label: 'Benutzerverwaltung', icon: Users },
     { key: 'firma' as const, label: 'Firma', icon: Building2 },
+    { key: 'lernregeln' as const, label: 'Lern-Regeln', icon: Brain },
     { key: 'system' as const, label: 'Systemstatus', icon: Activity },
   ];
 
@@ -490,6 +512,56 @@ const Admin = () => {
                             <SelectItem value="user">Benutzer</SelectItem>
                           </SelectContent>
                         </Select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </SectionCard>
+        )}
+
+        {/* Lern-Regeln */}
+        {activeSection === 'lernregeln' && (
+          <SectionCard
+            title="Lern-Regeln"
+            subtitle="Automatisch gespeicherte Korrekturen — werden bei ähnlichen Plänen angewandt"
+          >
+            {lernRegeln.length === 0 && !loading ? (
+              <p className="text-sm text-muted-foreground py-4">
+                Noch keine Lern-Regeln vorhanden. Korrekturen im Geometrie- oder Struktur-Tab werden automatisch hier gespeichert.
+              </p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Feld</th>
+                    <th>Falsch erkannt</th>
+                    <th>Korrekt</th>
+                    <th>Kontext</th>
+                    <th>Angewandt</th>
+                    <th>Erstellt</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lernRegeln.map((r) => (
+                    <tr key={r.id}>
+                      <td><Badge variant="outline" className="font-mono text-[10px]">{r.field}</Badge></td>
+                      <td className="text-xs text-muted-foreground">{r.wrong_value ?? '—'}</td>
+                      <td className="text-xs font-medium text-status-green">{r.correct_value}</td>
+                      <td className="text-xs text-muted-foreground">{r.trigger_context ?? '—'}</td>
+                      <td className="text-xs font-mono text-center">{r.applied_count}</td>
+                      <td className="text-xs text-muted-foreground">{new Date(r.created_at).toLocaleDateString('de-AT')}</td>
+                      <td>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive"
+                          onClick={() => deleteLernRegel(r.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
                     </tr>
                   ))}

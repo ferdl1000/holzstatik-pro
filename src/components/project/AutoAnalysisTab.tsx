@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { Badge } from '@/components/ui/badge';
+import { loadApplicableRules, applyRules } from '@/lib/learning/captureCorrection';
 import {
   Sparkles, Loader2, ChevronDown, ChevronUp,
   CheckCircle2, AlertTriangle, XCircle,
@@ -49,6 +51,9 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
   const [result, setResult] = useState<AutoPipelineResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+  const [dimMode, setDimMode] = useState<'wirtschaftlich' | 'sicher'>(
+    project.dimensioningMode ?? 'wirtschaftlich',
+  );
 
   // Auto-trigger analysis when navigated from NewProject with ?autoAnalyze=true
   useEffect(() => {
@@ -137,11 +142,45 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
             .single();
 
           if (refreshed) {
-            const refreshedProject: Project = {
+            let refreshedProject: Project = {
               ...project,
               ...(refreshed.project_data ?? {}),
               id: projectId,
             } as Project;
+
+            // ── Schritt 2b: Lern-Regeln anwenden ────────────────────────────
+            try {
+              const triggerContext = refreshedProject.name || undefined;
+              const rules = await loadApplicableRules(triggerContext);
+              if (rules.length > 0) {
+                // Auf Toplevel-Felder des Projekts anwenden (roofForm, structuralSystemType etc.)
+                const flatProject: Record<string, unknown> = {
+                  roofForm: refreshedProject.roofType?.form,
+                  structuralSystemType: refreshedProject.structuralSystem?.type,
+                  roofPitch: refreshedProject.geometry?.roofPitch?.value,
+                  coveringType: refreshedProject.coveringType?.type,
+                };
+                const { result: patched, applied } = applyRules(flatProject, rules);
+                if (applied.length > 0) {
+                  // Überschriebene Felder zurückschreiben
+                  if (patched.roofForm && refreshedProject.roofType) {
+                    refreshedProject = { ...refreshedProject, roofType: { ...refreshedProject.roofType, form: patched.roofForm as any } };
+                  }
+                  if (patched.structuralSystemType && refreshedProject.structuralSystem) {
+                    refreshedProject = { ...refreshedProject, structuralSystem: { ...refreshedProject.structuralSystem, type: patched.structuralSystemType as any } };
+                  }
+                  if (patched.roofPitch !== undefined && refreshedProject.geometry?.roofPitch) {
+                    refreshedProject = { ...refreshedProject, geometry: { ...refreshedProject.geometry!, roofPitch: { ...refreshedProject.geometry!.roofPitch, value: Number(patched.roofPitch) } } };
+                  }
+                  toast({
+                    title: `${applied.length} Lern-Regel${applied.length > 1 ? 'n' : ''} angewandt`,
+                    description: applied.map(r => `${r.field}: ${r.correct_value}`).join(', '),
+                  });
+                }
+              }
+            } catch (ruleErr) {
+              console.debug('[AutoAnalysis] Lern-Regeln Fehler (ignored):', ruleErr);
+            }
 
             // ── Schritt 3: Pipeline mit refreshed-Daten ──────────────────────
             setProgressStep(0);
@@ -362,10 +401,47 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
             </CardContent>
           </Card>
 
-          {/* Bauteile-Tabelle */}
+          {/* Bauteile-Tabelle mit Varianten-Toggle */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Bauteile &amp; Querschnitte</CardTitle>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <CardTitle className="text-base">Bauteile &amp; Querschnitte</CardTitle>
+                <div className="flex items-center gap-1 rounded-lg border p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDimMode('wirtschaftlich');
+                      if (onUpdate) onUpdate({ dimensioningMode: 'wirtschaftlich' });
+                    }}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      dimMode === 'wirtschaftlich'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Wirtschaftlich
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDimMode('sicher');
+                      if (onUpdate) onUpdate({ dimensioningMode: 'sicher' });
+                    }}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      dimMode === 'sicher'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Sicher
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {dimMode === 'wirtschaftlich'
+                  ? 'Kleinster Querschnitt, der alle Nachweise erfüllt (η ≤ 0,95)'
+                  : 'Eine Profilgröße mehr Reserve (η ≤ 0,85) – empfohlen für Angebote'}
+              </p>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
@@ -374,29 +450,53 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
                     <tr className="border-b text-xs text-muted-foreground">
                       <th className="pb-2 text-left font-medium">Bauteil</th>
                       <th className="pb-2 text-left font-medium">Typ</th>
-                      <th className="pb-2 text-right font-medium">b/h</th>
-                      <th className="pb-2 text-right font-medium">η max</th>
+                      <th className="pb-2 text-center font-medium">
+                        Wirtschaftlich <span className="font-normal">(η)</span>
+                      </th>
+                      <th className="pb-2 text-center font-medium">
+                        Sicher <span className="font-normal">(η)</span>
+                      </th>
                       <th className="pb-2 text-center font-medium">Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {result.calculations.members.map((m, i) => (
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="py-1.5 pr-4 font-medium">{m.member.name}</td>
-                        <td className="py-1.5 pr-4 text-muted-foreground capitalize">{m.member.type}</td>
-                        <td className="py-1.5 pr-4 text-right font-mono text-xs">
-                          {m.section.b}/{m.section.h} cm
-                        </td>
-                        <td className="py-1.5 pr-4 text-right font-mono">
-                          {m.maxUtilization.toFixed(2)}
-                        </td>
-                        <td className="py-1.5 text-center">
-                          <span className="inline-flex justify-center">
-                            <StatusDot status={m.overallStatus} />
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {result.calculations.members.map((m, i) => {
+                      const w = m.variants?.wirtschaftlich;
+                      const s = m.variants?.sicher;
+                      const activeStatus = (dimMode === 'sicher' ? s?.status : w?.status) ?? m.overallStatus;
+                      const sameProfile = s && w && s.b === w.b && s.h === w.h;
+                      return (
+                        <tr key={i} className="border-b last:border-0">
+                          <td className="py-1.5 pr-4 font-medium">{m.member.name}</td>
+                          <td className="py-1.5 pr-4 text-muted-foreground capitalize">{m.member.type}</td>
+                          <td className="py-1.5 px-2 text-center">
+                            <span className={`inline-flex items-center gap-1 font-mono text-xs ${dimMode === 'wirtschaftlich' ? 'font-semibold' : 'text-muted-foreground'}`}>
+                              {w ? w.label : `${m.section.b}/${m.section.h}`}
+                              <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                                η {(w ? w.eta : m.maxUtilization).toFixed(2)}
+                              </Badge>
+                            </span>
+                          </td>
+                          <td className="py-1.5 px-2 text-center">
+                            {s && !sameProfile ? (
+                              <span className={`inline-flex items-center gap-1 font-mono text-xs ${dimMode === 'sicher' ? 'font-semibold' : 'text-muted-foreground'}`}>
+                                {s.label}
+                                <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                                  η {s.eta.toFixed(2)}
+                                </Badge>
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground italic">= wirtschaftlich</span>
+                            )}
+                          </td>
+                          <td className="py-1.5 text-center">
+                            <span className="inline-flex justify-center">
+                              <StatusDot status={activeStatus} />
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {result.calculations.members.length === 0 && (
                       <tr>
                         <td colSpan={5} className="py-4 text-center text-muted-foreground text-xs">

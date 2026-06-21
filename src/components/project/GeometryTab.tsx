@@ -10,6 +10,7 @@ import { Ruler, Check, Edit, TriangleAlert, Save, AlertTriangle } from 'lucide-r
 import { useToast } from '@/hooks/use-toast';
 import { RoofVisualization } from './RoofVisualization';
 import type { BuildingGeometry, NumberWithConfidence } from '@/types/project';
+import { captureCorrection } from '@/lib/learning/captureCorrection';
 
 interface GeometryTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -40,16 +41,45 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
   const handleConfirm = () => {
     if (!onUpdate) return;
     const updatedGeo: BuildingGeometry = { ...displayGeo, userConfirmed: true, confidence: 1.0 };
-    // Apply edited values
+
+    // Planer-Kontext aus Projektname ableiten (für Lern-Regeln)
+    const triggerContext = project.name || undefined;
+
+    // Apply edited values + Korrekturen erfassen
+    const correctedFields: string[] = [];
     for (const [key, val] of Object.entries(values)) {
       if (key in updatedGeo && typeof (updatedGeo as any)[key] === 'object') {
-        (updatedGeo as any)[key] = { ...(updatedGeo as any)[key], value: val, source: 'user' as const };
+        const oldField = (updatedGeo as any)[key];
+        const oldVal = oldField?.value;
+        const oldSource = oldField?.source;
+        (updatedGeo as any)[key] = { ...oldField, value: val, source: 'user' as const };
+
+        // Nur bei KI-Erkennungen als Korrektur speichern
+        if (oldSource === 'extracted' && oldVal !== undefined && oldVal !== val) {
+          correctedFields.push(key);
+          captureCorrection({
+            field: key,
+            wrongValue: String(oldVal),
+            correctValue: String(val),
+            triggerContext,
+            reason: `Manuelle Korrektur im Geometrie-Tab`,
+          });
+        }
       }
     }
+
     onUpdate({ geometry: updatedGeo });
     setEditing(false);
     setValues({});
-    toast({ title: 'Geometrie gespeichert und bestätigt' });
+
+    if (correctedFields.length > 0) {
+      toast({
+        title: 'Geometrie gespeichert und bestätigt',
+        description: `Korrektur als Lern-Regel gespeichert — wird bei ähnlichen Plänen angewandt (${correctedFields.join(', ')})`,
+      });
+    } else {
+      toast({ title: 'Geometrie gespeichert und bestätigt' });
+    }
   };
 
   return (

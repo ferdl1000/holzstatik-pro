@@ -19,6 +19,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { geminiVision, parseJsonResponse, CORS_HEADERS } from '../_shared/gemini.ts';
+import { parseAllFacts, ParsedFacts } from '../_shared/textParser.ts';
 
 // ============================================================
 // STAGE 1 — INVENTUR
@@ -297,6 +298,79 @@ Bei JEDER Korrektur: in assumptions[]-Array eintragen "Stage 3 Korrektur: <was w
 Wenn keine Korrekturen nötig: assumptions[] behält bestehende Einträge, kein neuer "Stage 3" Eintrag.`;
 
 // ============================================================
+// PASS 0 — OCR (reiner Text-Extrakt, kein JSON)
+// ============================================================
+const OCR_PROMPT = `Du bist ein OCR-System. Gib ALLEN sichtbaren Text aus diesem Plan zurück.
+KEINE Interpretation, KEINE Struktur — nur den ROHEN TEXT, Zeile für Zeile, so vollständig wie möglich.
+Lies ALLE Beschriftungen, Maße, Legenden, Tabellen, Schriftfelder.
+Wichtig: Erfasse besonders sorgfältig:
+- Alle "DN X°" und "Dachneigung X°" Angaben
+- Alle Aufbauten-Legenden (B1, D1, 06, etc. mit ihren Schichten)
+- Alle "ÜBERDACHUNG", "Vordach", "VORDACHKANTE" Texte
+- Alle Maße mit Einheit
+- Adressen + PLZ
+Gib NUR den Text zurück, kein JSON, keine Erklärung.`;
+
+// ============================================================
+// applyHardFacts — erzwingt deterministisch extrahierte Werte
+// ============================================================
+function applyHardFacts(extracted: Record<string, unknown>, facts: ParsedFacts): Record<string, unknown> {
+  // 1) DN-Marker erzwingen
+  if (facts.dnMarkers.length > 0 && Array.isArray(extracted.roofParts)) {
+    const primary = facts.dnMarkers[0].value;
+    const parts = extracted.roofParts as Array<Record<string, unknown>>;
+    parts.forEach((rp, i) => {
+      const newPitch = facts.dnMarkers[i]?.value ?? primary;
+      const oldPitch = rp.pitch as number | undefined;
+      rp.pitch = newPitch;
+      // Dachform-Heuristik
+      if (newPitch <= 5) {
+        rp.form = 'flachdach';
+      } else if (newPitch < 12 && rp.form === 'satteldach') {
+        rp.form = 'pultdach';
+      }
+      if (oldPitch !== undefined && Math.abs(oldPitch - newPitch) > 2) {
+        extracted.assumptions = extracted.assumptions ?? [];
+        (extracted.assumptions as string[]).push(
+          `HardFacts-Override roofPart[${i}]: pitch ${oldPitch}° → ${newPitch}° (aus TextParser DN-Marker "${facts.dnMarkers[i]?.raw ?? facts.dnMarkers[0].raw}")`
+        );
+      }
+    });
+    // Auch dimensions[Dachneigung] synchronisieren
+    if (Array.isArray(extracted.dimensions)) {
+      const dims = extracted.dimensions as Array<Record<string, unknown>>;
+      const existing = dims.find(d => d.label === 'Dachneigung');
+      if (existing) {
+        existing.value = primary;
+        existing._source = 'TextParser';
+      } else {
+        dims.push({ label: 'Dachneigung', value: primary, unit: '°', confidence: 0.98, _source: 'TextParser' });
+      }
+    }
+  }
+
+  // 2) Eindeckung erzwingen (nur wenn KI unsicher oder leer)
+  if (facts.coveringHints.length > 0) {
+    const current = extracted.covering as Record<string, unknown> | undefined;
+    const currentConf = (current?.confidence as number | undefined) ?? 0;
+    if (!current || currentConf < 0.9) {
+      extracted.covering = {
+        type: facts.coveringHints[0].type,
+        weight_kN_m2: 0.55,
+        evidence: `Aus TextParser: ${facts.coveringHints[0].raw}`,
+        confidence: 0.95,
+      };
+      extracted.assumptions = extracted.assumptions ?? [];
+      (extracted.assumptions as string[]).push(
+        `HardFacts-Override covering: ${facts.coveringHints[0].type} (KI-Konfidenz war ${currentConf.toFixed(2)})`
+      );
+    }
+  }
+
+  return extracted;
+}
+
+// ============================================================
 // SINGLE-STAGE FALLBACK (großer Prompt — bewährt)
 // ============================================================
 const SYSTEM = `Du bist ein Dokumenten-Agent für österreichische Einreichpläne (Baugenehmigungspläne im PDF-Format).
@@ -562,10 +636,51 @@ async function analyzeDocumentMultiStage(
 ): Promise<Record<string, unknown>> {
   const stageLog: { stages: unknown[] } = { stages: [] };
 
+  // --- Pass 0: OCR-Text (deterministisch, kein JSON) ---
+  let ocrText = '';
+  let facts: ParsedFacts = {
+    dnMarkers: [], dimensions: [], coveringHints: [], ueberdachungCount: 0,
+    ueberdachungLabels: [], ceilingHints: [], aufbautenCodes: [], postalCodes: [],
+    fireProtection: { reiClasses: [] }, wallHints: [], structureHints: [],
+  };
+  try {
+    ocrText = await geminiVision({
+      systemPrompt: OCR_PROMPT,
+      userPrompt: `Extrahiere allen Text aus: ${fileName}`,
+      fileBase64: base64,
+      mimeType: 'application/pdf',
+      jsonMode: false,
+      maxTokens: 16000,
+      model: 'gemini-2.5-flash',
+    });
+    // Pass 0.5: deterministischer Parser
+    facts = parseAllFacts(ocrText);
+    stageLog.stages.push({
+      stage: 0, status: 'ok',
+      summary: `OCR: ${ocrText.length} Zeichen | DN-Marker: ${facts.dnMarkers.map(d => d.value + '°').join(', ') || 'keine'} | Überdachungen: ${facts.ueberdachungCount} | Eindeckung: ${facts.coveringHints.map(c => c.type).join(', ') || 'unklar'}`,
+    });
+  } catch (ocrErr) {
+    // Quota o.ä. — graceful degradation, facts bleibt leer
+    stageLog.stages.push({ stage: 0, status: 'skipped', reason: String(ocrErr) });
+  }
+
+  // Harte Fakten als Kontext für Stage-1-Prompt aufbereiten
+  const hardFactsHint = facts.dnMarkers.length > 0 || facts.coveringHints.length > 0
+    ? `\n\n=== HARTE FAKTEN AUS OCR-TEXT-ANALYSE (VERBINDLICH!) ===
+Diese Werte wurden deterministisch per Regex aus dem rohen OCR-Text extrahiert:
+- Dachneigung(en): ${facts.dnMarkers.map(d => `${d.value}° (${d.raw})`).join(', ') || 'keine gefunden'}
+- Eindeckung: ${facts.coveringHints.map(c => c.type).join(', ') || 'unklar'}
+- Vordächer/Überdachungen: ${facts.ueberdachungCount} (${facts.ueberdachungLabels.join('; ') || 'keine'})
+- Aufbauten-Codes: ${facts.aufbautenCodes.map(a => a.code).join(', ') || 'keine'}
+- PLZ: ${facts.postalCodes.join(', ') || 'keine'}
+- Maße: ${facts.dimensions.map(d => `${d.label}=${d.value}m`).join(', ') || 'keine'}
+REGELN: Verwende diese Werte als Primärquelle. Wenn DN-Marker vorhanden, NIEMALS selbst berechnen!`
+    : '';
+
   // --- Stage 1: Inventur ---
   const stage1Text = await geminiVision({
     systemPrompt: STAGE1_PROMPT,
-    userPrompt: `Analysiere den Einreichplan "${fileName}" und liefere die Inventur als JSON.`,
+    userPrompt: `Analysiere den Einreichplan "${fileName}" und liefere die Inventur als JSON.${hardFactsHint}`,
     fileBase64: base64,
     mimeType: 'application/pdf',
     jsonMode: true,
@@ -581,7 +696,7 @@ async function analyzeDocumentMultiStage(
   // --- Stage 2: Details ---
   const stage2Text = await geminiVision({
     systemPrompt: STAGE2_PROMPT,
-    userPrompt: `Stage-1-Inventur:\n${JSON.stringify(stage1, null, 2)}\n\nAnalysiere den Plan "${fileName}" und liefere Stage-2-Details.`,
+    userPrompt: `Stage-1-Inventur:\n${JSON.stringify(stage1, null, 2)}\n\nAnalysiere den Plan "${fileName}" und liefere Stage-2-Details.${hardFactsHint}`,
     fileBase64: base64,
     mimeType: 'application/pdf',
     jsonMode: true,
@@ -619,6 +734,8 @@ async function analyzeDocumentMultiStage(
   // Stage-3 ist final — Metadaten anhängen
   stage3._multiStageLog = stageLog;
   stage3._analysisMethod = 'multi-stage-3';
+  // Harte Fakten für Debugging + Konsens-Engine speichern
+  stage3.parsedFacts = facts;
 
   // ── DN-Marker aus Stage 1 explizit auf roofParts mappen ──────────────────
   // Fallback-Kette: Stage1.dn_marker → Stage2.dn_markers → Stage3.dn_markers
@@ -671,6 +788,9 @@ async function analyzeDocumentMultiStage(
       }
     }
   }
+
+  // ── applyHardFacts: harte Fakten aus TextParser FINAL erzwingen ──
+  applyHardFacts(stage3, facts);
 
   return stage3;
 }
@@ -741,6 +861,18 @@ serve(async (req) => {
           analysisMethod = 'single-stage-quota-fallback';
           // DN-Marker post-processing (quota fallback)
           applyDnMarkers(extracted);
+          // OCR-Pass für Fallback (best-effort)
+          try {
+            const ocrFallback = await geminiVision({
+              systemPrompt: OCR_PROMPT,
+              userPrompt: `Extrahiere allen Text aus: ${doc.file_name}`,
+              fileBase64: base64, mimeType: 'application/pdf',
+              jsonMode: false, maxTokens: 16000, model: 'gemini-2.5-flash',
+            });
+            const factsFallback = parseAllFacts(ocrFallback);
+            extracted.parsedFacts = factsFallback;
+            applyHardFacts(extracted, factsFallback);
+          } catch { /* quota — kein OCR-Pass, facts bleibt leer */ }
         } else {
           throw multiStageErr;
         }
@@ -763,6 +895,18 @@ serve(async (req) => {
       analysisMethod = retryWith ? `single-stage-${retryWith}` : 'single-stage';
       // DN-Marker post-processing (single-stage)
       applyDnMarkers(extracted);
+      // OCR-Pass für Single-Stage (best-effort)
+      try {
+        const ocrSingle = await geminiVision({
+          systemPrompt: OCR_PROMPT,
+          userPrompt: `Extrahiere allen Text aus: ${doc.file_name}`,
+          fileBase64: base64, mimeType: 'application/pdf',
+          jsonMode: false, maxTokens: 16000, model: 'gemini-2.5-flash',
+        });
+        const factsSingle = parseAllFacts(ocrSingle);
+        extracted.parsedFacts = factsSingle;
+        applyHardFacts(extracted, factsSingle);
+      } catch { /* quota — kein OCR-Pass */ }
     }
 
     await supabase.from('documents').update({ status: 'analyzed', extracted_data: extracted }).eq('id', documentId);

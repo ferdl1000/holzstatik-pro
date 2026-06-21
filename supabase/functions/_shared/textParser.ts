@@ -1,0 +1,264 @@
+/**
+ * Deterministischer Text-Parser für Plan-Rohtext.
+ *
+ * KERN-IDEE: Statt die KI bitten, alles strukturiert zu liefern (nicht-deterministisch),
+ * lassen wir die KI NUR den rohen Text extrahieren (einfache Aufgabe, zuverlässig)
+ * und ziehen die harten Fakten (Dachneigung, Maße, Eindeckung, Adressen) per Regex
+ * deterministisch heraus. Diese Werte sind IMMER gleich — egal wie gut die KI drauf ist.
+ *
+ * Quelle der Regeln: PLAN_ERKENNUNG.md
+ */
+
+export interface ParsedFacts {
+  dnMarkers: { value: number; raw: string; source: 'DN' | 'Dachneigung' | 'Gefälle%' | 'Grad' }[];
+  dimensions: { value: number; label: string; raw: string }[];
+  coveringHints: { type: string; raw: string }[];
+  ueberdachungCount: number;
+  ueberdachungLabels: string[];
+  ceilingHints: { area: number; raw: string; constructionType: 'holzbalkendecke' | 'stb_decke' | 'unbekannt' }[];
+  aufbautenCodes: { code: string; line: string }[];
+  postalCodes: string[];
+  fireProtection: { gk?: string; reiClasses: string[] };
+  wallHints: { type: string; thickness?: number; raw: string }[];
+  structureHints: string[];
+}
+
+/** Wandelt "10", "10,5", "10.5" → number */
+function num(s: string): number {
+  return parseFloat(s.replace(',', '.'));
+}
+
+/**
+ * Findet alle Dachneigungs-Angaben im Text.
+ * Reihenfolge nach Spezifität: "DN 10°", "Dachneigung 5°", "DN = 22°", "X% Gefälle".
+ */
+export function parseDachneigung(text: string): ParsedFacts['dnMarkers'] {
+  const markers: ParsedFacts['dnMarkers'] = [];
+  const seen = new Set<string>();
+
+  // "DN 10°", "DN=22°", "DN = 10 °", "DN10°"
+  const dnRe = /DN\s*=?\s*(\d{1,2}(?:[.,]\d+)?)\s*°/gi;
+  let m: RegExpExecArray | null;
+  while ((m = dnRe.exec(text)) !== null) {
+    const v = num(m[1]);
+    if (v >= 0 && v <= 75) {
+      const key = `DN-${v}`;
+      if (!seen.has(key)) { seen.add(key); markers.push({ value: v, raw: m[0], source: 'DN' }); }
+    }
+  }
+
+  // "Dachneigung 5°", "Dachneigung: 35°", "Dachneigung von 22 Grad"
+  const dnWordRe = /Dachneigung\s*:?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)\s*(?:°|Grad)/gi;
+  while ((m = dnWordRe.exec(text)) !== null) {
+    const v = num(m[1]);
+    if (v >= 0 && v <= 75) {
+      const key = `DN-${v}`;
+      if (!seen.has(key)) { seen.add(key); markers.push({ value: v, raw: m[0], source: 'Dachneigung' }); }
+    }
+  }
+
+  // "X% Gefälle" → Grad: arctan(%/100)
+  const gefaelleRe = /(\d{1,2}(?:[.,]\d+)?)\s*%\s*Gefälle/gi;
+  while ((m = gefaelleRe.exec(text)) !== null) {
+    const pct = num(m[1]);
+    const grad = Math.round(Math.atan(pct / 100) * 180 / Math.PI * 10) / 10;
+    const key = `G-${grad}`;
+    if (!seen.has(key)) { seen.add(key); markers.push({ value: grad, raw: m[0], source: 'Gefälle%' }); }
+  }
+
+  return markers;
+}
+
+/**
+ * Findet Gebäude-Hauptmaße. Sucht nach beschrifteten Maßen.
+ */
+export function parseDimensions(text: string): ParsedFacts['dimensions'] {
+  const dims: ParsedFacts['dimensions'] = [];
+
+  const patterns: { label: string; re: RegExp }[] = [
+    { label: 'Gebäudelänge', re: /(?:Gebäudelänge|Länge|Geb\.?-?länge)\s*:?\s*(\d{1,3}(?:[.,]\d+)?)\s*m\b/gi },
+    { label: 'Gebäudebreite', re: /(?:Gebäudebreite|Breite|Geb\.?-?breite)\s*:?\s*(\d{1,3}(?:[.,]\d+)?)\s*m\b/gi },
+    { label: 'Firsthöhe', re: /(?:Firsthöhe|First|FH)\s*:?\s*\+?(\d{1,2}(?:[.,]\d+)?)\s*m?\b/gi },
+    { label: 'Traufhöhe', re: /(?:Traufhöhe|Traufe|TH)\s*:?\s*\+?(\d{1,2}(?:[.,]\d+)?)\s*m?\b/gi },
+    { label: 'Spannweite', re: /(?:Spannweite|lichte\s+Weite|Stützweite)\s*:?\s*(\d{1,2}(?:[.,]\d+)?)\s*m\b/gi },
+  ];
+
+  for (const { label, re } of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const v = num(m[1]);
+      if (v > 0 && v < 200) dims.push({ value: v, label, raw: m[0] });
+    }
+  }
+
+  return dims;
+}
+
+/**
+ * Eindeckung aus Text — sucht nach Material-Schlagwörtern.
+ * Quelle: PLAN_ERKENNUNG.md Abschnitt 3.
+ */
+export function parseCovering(text: string): ParsedFacts['coveringHints'] {
+  const hints: ParsedFacts['coveringHints'] = [];
+  const t = text.toLowerCase();
+  const map: { type: string; words: string[] }[] = [
+    { type: 'trapezblech', words: ['trapezblech', 'trapez blech'] },
+    { type: 'sandwich_paneel', words: ['dachpaneel', 'sandwichpaneel', 'sandwich-paneel', 'sandwich paneel'] },
+    { type: 'metal_falz', words: ['stehfalz', 'doppelstehfalz', 'falzblech'] },
+    { type: 'tile_clay', words: ['tondachziegel', 'dachziegel', 'falzziegel', 'scharren', 'tonziegel'] },
+    { type: 'tile_concrete', words: ['betondachstein', 'betonstein', 'frankfurter pfanne'] },
+    { type: 'schiefer', words: ['naturschiefer', 'schiefer'] },
+    { type: 'bitumen', words: ['bitumen', 'schweißbahn', 'schweissbahn'] },
+    { type: 'gruendach_ext', words: ['gründach extensiv', 'gruendach extensiv'] },
+    { type: 'gruendach_int', words: ['gründach intensiv', 'gruendach intensiv'] },
+  ];
+  for (const { type, words } of map) {
+    for (const w of words) {
+      const idx = t.indexOf(w);
+      if (idx >= 0) {
+        // Kontext: 20 Zeichen drumrum als raw
+        hints.push({ type, raw: text.slice(Math.max(0, idx - 5), idx + w.length + 10).trim() });
+        break;
+      }
+    }
+  }
+  return hints;
+}
+
+/** Zählt ÜBERDACHUNG / VORDACHKANTE / Vordach / Carport. */
+export function parseUeberdachung(text: string): { count: number; labels: string[] } {
+  const labels: string[] = [];
+  const patterns = [
+    /ÜBERDACHUNG[^\n]{0,30}/gi,
+    /VORDACHKANTE[- ]?(?:SATTELDACH|FLACHDACH|PULTDACH)?/gi,
+    /\bVordach\b[^\n]{0,20}/gi,
+    /\bTordach\b/gi,
+    /\bCarport\b/gi,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      labels.push(m[0].trim());
+    }
+  }
+  // Dedup ähnlicher Labels (ÜBERDACHUNG kann mehrfach für gleiche stehen)
+  const unique = [...new Set(labels.map(l => l.replace(/\s+/g, ' ').trim()))];
+  return { count: unique.length, labels: unique };
+}
+
+/** Holzbalkendecke vs STB-Decke. */
+export function parseCeilings(text: string): ParsedFacts['ceilingHints'] {
+  const hints: ParsedFacts['ceilingHints'] = [];
+
+  // "180,50 m² Holzboden" / "Holzbalkendecke" / "Holzdecke"
+  const holzRe = /(\d{1,4}(?:[.,]\d+)?)\s*m²?\s*(?:Holzboden|Holzbalkendecke|Holzdecke)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = holzRe.exec(text)) !== null) {
+    hints.push({ area: num(m[1]), raw: m[0], constructionType: 'holzbalkendecke' });
+  }
+  // generisch "Holzboden X" auch ohne m²
+  if (hints.length === 0 && /Holzboden|Holzbalkendecke/i.test(text)) {
+    hints.push({ area: 0, raw: 'Holzboden (Fläche unklar)', constructionType: 'holzbalkendecke' });
+  }
+  // STB-Decke erkennen (nur als Hinweis, nicht im Holzauszug)
+  if (/STB[- ]?Decke|Stahlbetondecke|Massivdecke|Filigrandecke/i.test(text)) {
+    hints.push({ area: 0, raw: 'STB-Decke (nicht im Holzauszug)', constructionType: 'stb_decke' });
+  }
+  return hints;
+}
+
+/** Aufbauten-Codes (B1, D1, 06, 09, ...). */
+export function parseAufbautenCodes(text: string): ParsedFacts['aufbautenCodes'] {
+  const codes: ParsedFacts['aufbautenCodes'] = [];
+  // Zeilen-basiert: Code am Zeilenanfang
+  const lines = text.split(/[\n\r]+/);
+  for (const line of lines) {
+    const t = line.trim();
+    // "D1 - Dachaufbau" / "06 Dachkonstruktion" / "B2 Bodenaufbau"
+    const m = t.match(/^([BDWKF]\d{1,2}|0\d|1[0-9])\s*[-–.:)]?\s*(\S.{2,})/);
+    if (m && /aufbau|konstruktion|dach|wand|boden|decke|fundament|terrasse|eindeckung/i.test(t)) {
+      codes.push({ code: m[1], line: t });
+    }
+  }
+  return codes;
+}
+
+/** Österreichische PLZ (4-stellig). */
+export function parsePostalCodes(text: string): string[] {
+  const re = /\b([1-9]\d{3})\b/g;
+  const found = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const plz = m[1];
+    // AT-PLZ: 1000-9999, plausibel
+    if (parseInt(plz) >= 1000 && parseInt(plz) <= 9999) found.add(plz);
+  }
+  return [...found];
+}
+
+/** GK + REI Brandschutz. */
+export function parseFireProtection(text: string): ParsedFacts['fireProtection'] {
+  const gkMatch = text.match(/\bGK\s*([1-5])\b|Gebäudeklasse\s*([1-5])/i);
+  const gk = gkMatch ? `GK${gkMatch[1] || gkMatch[2]}` : undefined;
+  const reiClasses: string[] = [];
+  const reiRe = /\b(REI?\s*\d{2,3}(?:-[CMS]+)?|R\s*\d{2,3}|EI\s*\d{2,3}(?:-C)?)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = reiRe.exec(text)) !== null) {
+    reiClasses.push(m[1].replace(/\s+/g, ' ').trim());
+  }
+  return { gk, reiClasses: [...new Set(reiClasses)] };
+}
+
+/** Wand-Konstruktion. */
+export function parseWalls(text: string): ParsedFacts['wallHints'] {
+  const hints: ParsedFacts['wallHints'] = [];
+  const t = text;
+  // "25 cm STB" / "25cm Stahlbeton"
+  let m = t.match(/(\d{2})\s*cm\s*STB|(\d{2})\s*cm\s*Stahlbeton/i);
+  if (m) hints.push({ type: 'stb', thickness: parseInt(m[1] || m[2]) * 10, raw: m[0] });
+  // "38er Ziegel"
+  m = t.match(/(\d{2})er\s*Ziegel|Ziegelmauerwerk\s*(\d{2})/i);
+  if (m) hints.push({ type: 'ziegel', thickness: parseInt(m[1] || m[2]) * 10, raw: m[0] });
+  // Holzständer / BSH-KVH-Wand
+  if (/BSH\/KVH\s*Wand|Holzständerwand|Holzständer/i.test(t)) {
+    hints.push({ type: 'holzstaender', thickness: 200, raw: 'BSH/KVH Wandkonstruktion' });
+  }
+  return hints;
+}
+
+/** Tragwerks-Hinweise (BSH, KVH, Sparren, etc.). */
+export function parseStructure(text: string): string[] {
+  const hints: string[] = [];
+  const checks: { re: RegExp; label: string }[] = [
+    { re: /BSH\s*Tragkonstruktion|BSH\/KVH\s*Tragkonstruktion/i, label: 'BSH-Tragkonstruktion' },
+    { re: /Leimbinder|Brettschichtholz/i, label: 'Leimbinder/BSH' },
+    { re: /Sparren\s*\d+\/\d+/i, label: 'Sparren-Bemaßung vorhanden' },
+    { re: /Pfette/i, label: 'Pfetten erwähnt' },
+    { re: /lt\.?\s*Statik|laut\s*Statik/i, label: 'Verweis auf Statik' },
+    { re: /Stahlträger|IPE\s*\d+|HEA\s*\d+|HEB\s*\d+/i, label: 'Stahlträger' },
+  ];
+  for (const { re, label } of checks) {
+    if (re.test(text)) hints.push(label);
+  }
+  return hints;
+}
+
+/**
+ * Haupt-Parser: zieht ALLE harten Fakten aus dem Roh-Text.
+ */
+export function parseAllFacts(text: string): ParsedFacts {
+  const ueber = parseUeberdachung(text);
+  return {
+    dnMarkers: parseDachneigung(text),
+    dimensions: parseDimensions(text),
+    coveringHints: parseCovering(text),
+    ueberdachungCount: ueber.count,
+    ueberdachungLabels: ueber.labels,
+    ceilingHints: parseCeilings(text),
+    aufbautenCodes: parseAufbautenCodes(text),
+    postalCodes: parsePostalCodes(text),
+    fireProtection: parseFireProtection(text),
+    wallHints: parseWalls(text),
+    structureHints: parseStructure(text),
+  };
+}

@@ -248,8 +248,28 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     sparrenSpacing,
   );
 
+  // ── 5b. Modus-abhängige optimizedMembers ─────────────────────────────────
+  // Wenn dimensioningMode === 'sicher': optimizedMembers mit sicherer Variante
+  const dimensioningMode = project.dimensioningMode ?? 'wirtschaftlich';
+  let effectiveOptimizedMembers = calculationsResult.optimizedMembers;
+  if (dimensioningMode === 'sicher') {
+    effectiveOptimizedMembers = calculationsResult.members.map((m, idx) => {
+      const sicher = m.variants?.sicher;
+      if (sicher && (sicher.b !== m.section.b || sicher.h !== m.section.h)) {
+        return {
+          ...calculationsResult.optimizedMembers[idx],
+          width: sicher.b,
+          height: sicher.h,
+          crossSection: sicher.label,
+          calculationStatus: sicher.status,
+        };
+      }
+      return calculationsResult.optimizedMembers[idx];
+    });
+  }
+
   // ── 6. Kosten ────────────────────────────────────────────────────────────
-  const costsResult = await autoComputeCosts(calculationsResult.optimizedMembers, derivedGeometry.geometry, {
+  const costsResult = await autoComputeCosts(effectiveOptimizedMembers, derivedGeometry.geometry, {
     joints: membersResult.joints,
     roofForm: project.roofType?.form ?? 'satteldach',
     includeDeckPlanks: true,
@@ -323,7 +343,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     structuralSystem: { structuralSystem: structuralSystemRaw, assumptions: structuralSystemAssumptions.filter((a) => a.field === 'structuralSystem') },
     members: membersResult,
     loads: loadsResult,
-    calculations: calculationsResult,
+    calculations: { ...calculationsResult, optimizedMembers: effectiveOptimizedMembers },
     costs: costsResult,
     allAssumptions,
     confidenceScore,

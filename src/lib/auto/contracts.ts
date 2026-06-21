@@ -49,6 +49,14 @@ export interface AutoLoadsResult {
   state: string;
 }
 
+export interface DimensioningVariant {
+  b: number;
+  h: number;
+  label: string;
+  eta: number;
+  status: 'green' | 'yellow' | 'red';
+}
+
 export interface AutoCalculationResult {
   /** Pro Bauteil: Optimizer-Ergebnis */
   members: Array<{
@@ -59,6 +67,11 @@ export interface AutoCalculationResult {
     overallStatus: 'green' | 'yellow' | 'red';
     summary: string;
     checks: Array<{ name: string; utilization: number; status: string; explanation: string }>;
+    /** Beide Dimensionierungsvarianten: wirtschaftlich (η ≤ 0.95) und sicher (nächstes Profil) */
+    variants?: {
+      wirtschaftlich: DimensioningVariant;
+      sicher: DimensioningVariant;
+    };
   }>;
   /** Verbesserte Members mit Optimizer-Ergebnis (b, h, material updated) */
   optimizedMembers: TimberMember[];
