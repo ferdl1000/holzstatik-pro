@@ -151,7 +151,8 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
 
             // ── Schritt 2b: Lern-Regeln anwenden ────────────────────────────
             try {
-              const triggerContext = refreshedProject.name || undefined;
+              const triggerContext = (refreshedProject as any).planerKey
+                || (refreshedProject as any).planerLabel || refreshedProject.name || undefined;
               const rules = await loadApplicableRules(triggerContext);
               if (rules.length > 0) {
                 // Auf Toplevel-Felder des Projekts anwenden (roofForm, structuralSystemType etc.)

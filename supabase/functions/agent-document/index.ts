@@ -795,7 +795,9 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
   try {
-    const { documentId, projectId, retryWith, focusOnMissing, useMultiStage, analysisQuality } = await req.json();
+    const { documentId, projectId, retryWith, focusOnMissing, useMultiStage, analysisQuality, learnedRulesPrompt } = await req.json();
+    // Selbst-Lernen: vom Orchestrator mitgegebener Block bestätigter Korrekturen.
+    const rulesBlock = typeof learnedRulesPrompt === 'string' ? learnedRulesPrompt : '';
     // Hochgenau-Modus: gemini-2.5-pro für den Vision-Hauptcall (kostenpflichtig, höhere Lese-Genauigkeit).
     // Standard (default): gemini-2.5-flash (kostenlos). Pro fällt bei Quota automatisch auf Flash zurück.
     const primaryVisionModel = analysisQuality === 'hochgenau' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
@@ -852,7 +854,7 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
    Schau in JEDEN Schnitt, JEDE Ansicht, JEDES Dachsymbol.
    Beispiel: wenn du "DN 10°" 5× im Plan siehst → "_dachneigungen": [10]
    Wenn Hauptdach 10° und Vordach 5° → "_dachneigungen": [10, 5]
-   Diese Werte sind WICHTIGER als alles andere — finde sie unbedingt!`;
+   Diese Werte sind WICHTIGER als alles andere — finde sie unbedingt!${rulesBlock}`;
         const text = await geminiVision({
           systemPrompt: combinedPrompt,
           userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}. Liefere das vollständige JSON inkl. _rawText.`,
@@ -895,7 +897,7 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
           // Quota: einfacher Single-Call ohne _rawText, mit DN-Marker-Post-Processing
           console.warn('Combined-Call Quota-Fehler, Minimal-Fallback:', errMsg);
           const text = await geminiVision({
-            systemPrompt: SYSTEM,
+            systemPrompt: SYSTEM + rulesBlock,
             userPrompt: `Analysiere diesen Einreichplan: ${doc.file_name}. Liefere JSON laut System-Prompt.`,
             fileBase64: base64,
             mimeType: 'application/pdf',
@@ -923,7 +925,7 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
         ? `Analysiere diesen Einreichplan NOCHMALS SEHR SORGFÄLTIG: ${doc.file_name}.\nACHTE BESONDERS AUF: Dachneigung (°), Gebäudegeometrie (Länge/Breite/Firsthöhe/Traufhöhe), Schnittdarstellungen, Bemaßungslinien.\nFüge ein Feld "_rawText" mit allem sichtbaren Text hinzu.\nLiefere JSON laut System-Prompt.`
         : `Analysiere diesen Einreichplan: ${doc.file_name}. Füge ein Feld "_rawText" mit allem sichtbaren Text hinzu. Liefere JSON laut System-Prompt.`;
       const text = await geminiVision({
-        systemPrompt: SYSTEM,
+        systemPrompt: SYSTEM + rulesBlock,
         userPrompt,
         fileBase64: base64,
         mimeType: 'application/pdf',

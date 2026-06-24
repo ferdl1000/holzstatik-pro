@@ -42,8 +42,10 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
     if (!onUpdate) return;
     const updatedGeo: BuildingGeometry = { ...displayGeo, userConfirmed: true, confidence: 1.0 };
 
-    // Planer-Kontext aus Projektname ableiten (für Lern-Regeln)
-    const triggerContext = project.name || undefined;
+    // Planer-Key macht Lern-Regeln auf NEUE Pläne desselben Planers übertragbar.
+    // Fällt auf den Projektnamen zurück, wenn (noch) kein Planer erkannt wurde.
+    const triggerPattern = (project as any).planerKey || undefined;
+    const triggerContext = (project as any).planerLabel || project.name || undefined;
 
     // Apply edited values + Korrekturen erfassen
     const correctedFields: string[] = [];
@@ -61,6 +63,7 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
             field: key,
             wrongValue: String(oldVal),
             correctValue: String(val),
+            triggerPattern,
             triggerContext,
             reason: `Manuelle Korrektur im Geometrie-Tab`,
           });

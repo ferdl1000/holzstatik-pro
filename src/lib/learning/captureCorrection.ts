@@ -4,7 +4,8 @@ export interface CorrectionInput {
   field: string;           // 'roofPitch', 'coveringType', 'roofForm', etc.
   wrongValue: string;
   correctValue: string;
-  triggerContext?: string; // Planer-Name oder PLZ aus Projekt
+  triggerPattern?: string; // normalisierter Planer-Key — macht die Regel auf NEUE Pläne desselben Planers übertragbar
+  triggerContext?: string; // menschenlesbar, z.B. 'Planer: ZT Mustermann'
   reason?: string;
 }
 
@@ -17,14 +18,18 @@ export async function captureCorrection(input: CorrectionInput): Promise<void> {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Prüfen ob ähnliche Regel existiert → applied_count erhöhen
-    const { data: existing } = await supabase
+    // Prüfen ob ähnliche Regel existiert → applied_count erhöhen.
+    // Gleicher Planer (trigger_pattern) + Feld + korrekter Wert = dieselbe Regel.
+    let query = supabase
       .from('erkennungs_regeln')
       .select('id, applied_count')
       .eq('user_id', user.id)
       .eq('field', input.field)
-      .eq('correct_value', input.correctValue)
-      .maybeSingle();
+      .eq('correct_value', input.correctValue);
+    query = input.triggerPattern
+      ? query.eq('trigger_pattern', input.triggerPattern)
+      : query.is('trigger_pattern', null);
+    const { data: existing } = await query.maybeSingle();
 
     if (existing) {
       await supabase
@@ -37,6 +42,7 @@ export async function captureCorrection(input: CorrectionInput): Promise<void> {
         field: input.field,
         wrong_value: input.wrongValue,
         correct_value: input.correctValue,
+        trigger_pattern: input.triggerPattern,
         trigger_context: input.triggerContext,
         reason: input.reason,
       });
@@ -74,13 +80,18 @@ export async function loadApplicableRules(triggerContext?: string): Promise<Erke
 
     if (!data) return [];
 
-    // Filtere nach Kontext-Match wenn vorhanden
+    // Globale Regeln (ohne trigger_pattern) gelten immer; planer-spezifische
+    // nur wenn der Planer-Key passt. So transferieren Korrekturen auf neue Pläne
+    // desselben Planers, ohne fremde Pläne zu verfälschen.
     if (triggerContext) {
-      return (data as ErkennungsRegel[]).filter(
-        r => !r.trigger_context
+      return (data as ErkennungsRegel[]).filter((r) => {
+        const pat = (r as ErkennungsRegel & { trigger_pattern?: string | null }).trigger_pattern;
+        if (!pat && !r.trigger_context) return true; // global
+        if (pat) return triggerContext.includes(pat) || pat.includes(triggerContext);
+        return !r.trigger_context
           || triggerContext.includes(r.trigger_context)
-          || r.trigger_context.includes(triggerContext),
-      );
+          || r.trigger_context.includes(triggerContext);
+      });
     }
 
     return data as ErkennungsRegel[];

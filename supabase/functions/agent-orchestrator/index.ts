@@ -8,6 +8,9 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { CORS_HEADERS } from '../_shared/gemini.ts';
+import {
+  loadRulesForProject, derivePlanerKey, buildRulesPromptBlock, applyLearnedRules, type LearnedRule,
+} from '../_shared/learning.ts';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
@@ -181,9 +184,38 @@ serve(async (req) => {
       return merged;
     }
 
+    // === 0. Selbst-Lern-Regeln laden (serverseitig, Planer-skopiert) ===
+    // Bei Re-Analyse (User korrigiert → neu analysieren) ist der Planer aus dem
+    // vorigen Lauf bereits bekannt → Regeln können in den KI-Prompt injiziert werden.
+    let learnedRules: LearnedRule[] = [];
+    let learnedRulesPrompt = '';
+    let ruleOwnerId: string | null = null;
+    let planerKey: string | null = null;
+    try {
+      const { data: projRow } = await supabase
+        .from('projects').select('user_id, project_data').eq('id', projectId).single();
+      ruleOwnerId = (projRow?.user_id as string) ?? null;
+      const priorAddresses = (projRow?.project_data as any)?.addresses
+        ?? (projRow?.project_data as any)?._addresses ?? [];
+      const derived = derivePlanerKey(priorAddresses);
+      planerKey = derived.key;
+      if (ruleOwnerId) {
+        learnedRules = await loadRulesForProject(supabase, ruleOwnerId, planerKey);
+        learnedRulesPrompt = buildRulesPromptBlock(learnedRules);
+        if (learnedRules.length > 0) {
+          log.push(`✓ Selbst-Lernen: ${learnedRules.length} Regel(n) geladen${planerKey ? ` (Planer: ${planerKey})` : ' (global)'}${learnedRulesPrompt ? ' → in KI-Prompt injiziert' : ''}`);
+        }
+      }
+    } catch (e) {
+      log.push(`ℹ Selbst-Lernen: keine Regeln (${e instanceof Error ? e.message : 'n/a'})`);
+    }
+
     // === 1. Dokument-Agent (First-Pass) ===
     log.push(`[${new Date().toISOString()}] ▶ Dokumenten-Agent First-Pass (Gemini Vision)…`);
-    const docResult = await safeCallAgent('agent-document', { projectId, documentId, analysisQuality });
+    const docResult = await safeCallAgent('agent-document', {
+      projectId, documentId, analysisQuality,
+      ...(learnedRulesPrompt ? { learnedRulesPrompt } : {}),
+    });
     let extracted: Record<string, any>;
     if (!docResult.ok) {
       log.push(`✗ Dokument-Agent: ${docResult.error}`);
@@ -733,6 +765,62 @@ serve(async (req) => {
     if (uncertainFields.length > 0) {
       projectUpdate.uncertainFields = uncertainFields;
       log.push(`⚠ Unsichere Felder gespeichert: ${uncertainFields.join(', ')}`);
+    }
+
+    // === Selbst-Lernen: Adressen + Planer persistieren (für nächsten Lauf + Korrektur-Capture) ===
+    if (Array.isArray(extracted.addresses) && extracted.addresses.length > 0) {
+      projectUpdate.addresses = extracted.addresses;
+    }
+    {
+      const persisted = derivePlanerKey(extracted.addresses ?? []);
+      if (persisted.key) {
+        projectUpdate.planerKey = persisted.key;
+        projectUpdate.planerLabel = persisted.label;
+      }
+    }
+
+    // === Selbst-Lernen: Regeln deterministisch anwenden (Post-Processing) ===
+    // Planer aus den FRISCHEN Adressen neu ableiten — falls beim First-Pass noch
+    // unbekannt (Erst-Analyse), greifen jetzt die planer-spezifischen Regeln.
+    try {
+      const freshPlaner = derivePlanerKey(extracted.addresses ?? []);
+      if (freshPlaner.key && freshPlaner.key !== planerKey && ruleOwnerId) {
+        planerKey = freshPlaner.key;
+        learnedRules = await loadRulesForProject(supabase, ruleOwnerId, planerKey);
+        log.push(`✓ Selbst-Lernen: Planer "${planerKey}" aus Plan erkannt → ${learnedRules.length} Regel(n)`);
+      }
+      if (learnedRules.length > 0) {
+        // Flache Projekt-Sicht für die Regelanwendung
+        const flat: Record<string, any> = {
+          roofForm: projectUpdate.roofType?.form,
+          coveringType: projectUpdate.coveringType?.type,
+          structuralSystemType: projectUpdate.structuralSystem?.type,
+          roofPitch: projectUpdate.geometry?.roofPitch?.value,
+          fireClass: projectUpdate.fireProtection?.reiClass,
+          gk: projectUpdate.fireProtection?.gk,
+          overallConfidence: extracted.overallConfidence,
+        };
+        const { applied } = applyLearnedRules(flat, learnedRules);
+        if (applied.length > 0) {
+          for (const a of applied) {
+            if (a.field === 'roofForm' && projectUpdate.roofType) { projectUpdate.roofType.form = a.to; projectUpdate.roofType.userConfirmed = false; }
+            if (a.field === 'coveringType' && projectUpdate.coveringType) projectUpdate.coveringType.type = a.to;
+            if (a.field === 'structuralSystemType' && projectUpdate.structuralSystem) projectUpdate.structuralSystem.type = a.to;
+            if (a.field === 'roofPitch' && projectUpdate.geometry?.roofPitch) projectUpdate.geometry.roofPitch.value = Number(a.to);
+            if (a.field === 'fireClass' && projectUpdate.fireProtection) projectUpdate.fireProtection.reiClass = a.to;
+            if (a.field === 'gk' && projectUpdate.fireProtection) projectUpdate.fireProtection.gk = a.to;
+          }
+          const summary = applied.map(a => `${a.field}: ${a.from}→${a.to}`).join(', ');
+          log.push(`✓ Selbst-Lernen angewandt: ${summary}`);
+          await supabase.from('audit_log').insert({
+            project_id: projectId, agent: 'Selbst-Lernen',
+            action: `${applied.length} gelernte Regel(n) angewandt`,
+            field: 'learned_rules', reason: summary, user_initiated: false,
+          });
+        }
+      }
+    } catch (e) {
+      log.push(`ℹ Selbst-Lernen Post-Processing übersprungen (${e instanceof Error ? e.message : 'n/a'})`);
     }
 
     await supabase.from('projects')

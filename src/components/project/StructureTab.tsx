@@ -46,7 +46,8 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
         field: 'roofForm',
         wrongValue: String(roof.form),
         correctValue: String(form),
-        triggerContext: project.name || undefined,
+        triggerPattern: (project as any).planerKey || undefined,
+        triggerContext: (project as any).planerLabel || project.name || undefined,
         reason: 'Manuelle Dachform-Korrektur im Struktur-Tab',
       });
       toast({
@@ -74,7 +75,8 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
         field: 'structuralSystemType',
         wrongValue: String(sys.type),
         correctValue: String(type),
-        triggerContext: project.name || undefined,
+        triggerPattern: (project as any).planerKey || undefined,
+        triggerContext: (project as any).planerLabel || project.name || undefined,
         reason: 'Manuelle Tragsystem-Korrektur im Struktur-Tab',
       });
     }
