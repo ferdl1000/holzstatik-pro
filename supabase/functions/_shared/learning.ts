@@ -101,6 +101,26 @@ export function derivePlanerKey(addresses: unknown): { key: string | null; label
 }
 
 /**
+ * Deterministischer Fallback: Planer aus dem Rohtext ziehen, wenn die KI keine
+ * Planverfasser-Adresse im addresses-Array geliefert hat. Sucht den Block nach
+ * einem Planer-Stichwort und nimmt die folgende Adresszeile (Straße + PLZ + Ort).
+ */
+export function derivePlanerKeyFromText(rawText: string | null | undefined): { key: string | null; label: string | null } {
+  if (!rawText || rawText.length < 20) return { key: null, label: null };
+  const text = rawText.replace(/\r/g, '');
+  // Stichwort gefolgt (innerhalb ~120 Zeichen) von einer Adresse mit PLZ.
+  const KEYWORDS = '(?:planverfasser|verfasser|planung|entwurf|projektant|ziviltechniker|baumeister)';
+  const re = new RegExp(`${KEYWORDS}[^\\n]{0,40}?[:\\n\\s]\\s*([^\\n]{3,80}?\\b\\d{4}\\s+[A-Za-zÄÖÜäöüß .-]{2,40})`, 'i');
+  const m = text.match(re);
+  if (m && m[1]) {
+    const addr = m[1].trim();
+    const key = slugAddress(addr);
+    if (key.length >= 4) return { key, label: `Planer: ${addr.slice(0, 70)}` };
+  }
+  return { key: null, label: null };
+}
+
+/**
  * Lädt die für diesen Plan relevanten Regeln:
  * - Regeln OHNE trigger_pattern (global, vom Nutzer überall gewollt) UND
  * - Regeln deren trigger_pattern zum Planer-Key passt.

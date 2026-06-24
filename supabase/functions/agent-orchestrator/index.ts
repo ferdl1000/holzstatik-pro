@@ -9,7 +9,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { CORS_HEADERS } from '../_shared/gemini.ts';
 import {
-  loadRulesForProject, derivePlanerKey, buildRulesPromptBlock, applyLearnedRules, type LearnedRule,
+  loadRulesForProject, derivePlanerKey, derivePlanerKeyFromText,
+  buildRulesPromptBlock, applyLearnedRules, type LearnedRule,
 } from '../_shared/learning.ts';
 
 serve(async (req) => {
@@ -814,7 +815,8 @@ serve(async (req) => {
       projectUpdate.addresses = extracted.addresses;
     }
     {
-      const persisted = derivePlanerKey(extracted.addresses ?? []);
+      let persisted = derivePlanerKey(extracted.addresses ?? []);
+      if (!persisted.key) persisted = derivePlanerKeyFromText(extracted._rawText as string);
       if (persisted.key) {
         projectUpdate.planerKey = persisted.key;
         projectUpdate.planerLabel = persisted.label;
@@ -825,7 +827,9 @@ serve(async (req) => {
     // Planer aus den FRISCHEN Adressen neu ableiten — falls beim First-Pass noch
     // unbekannt (Erst-Analyse), greifen jetzt die planer-spezifischen Regeln.
     try {
-      const freshPlaner = derivePlanerKey(extracted.addresses ?? []);
+      // 1. aus KI-Adressen, 2. Fallback aus Rohtext (deterministisch, KI-unabhängig)
+      let freshPlaner = derivePlanerKey(extracted.addresses ?? []);
+      if (!freshPlaner.key) freshPlaner = derivePlanerKeyFromText(extracted._rawText as string);
       if (freshPlaner.key && freshPlaner.key !== planerKey && ruleOwnerId) {
         planerKey = freshPlaner.key;
         learnedRules = await loadRulesForProject(supabase, ruleOwnerId, planerKey);
