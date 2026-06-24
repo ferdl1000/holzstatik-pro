@@ -12,6 +12,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { CompanyProfileEditor } from '@/components/admin/CompanyProfileEditor';
+import { getAnalysisQuality, setAnalysisQuality, type AnalysisQuality } from '@/lib/settings/analysisQuality';
 
 interface SystemSetting {
   id: string;
@@ -49,6 +50,7 @@ const Admin = () => {
   const [newDesc, setNewDesc] = useState('');
   const [newIsSecret, setNewIsSecret] = useState(false);
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set());
+  const [analysisQuality, setAnalysisQualityState] = useState<AnalysisQuality>(getAnalysisQuality());
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
   const { toast } = useToast();
@@ -219,6 +221,43 @@ const Admin = () => {
                   ))}
                 </div>
               )}
+            </SectionCard>
+
+            <SectionCard
+              title="Analyse-Genauigkeit"
+              subtitle="Standard nutzt Gemini Flash (kostenlos) + Geometrie-Schiedsrichter für die Dachneigung. Hochgenau nutzt Gemini Pro für maximale Lese-Genauigkeit bei wichtigen Plänen."
+            >
+              <div className="flex items-center justify-between rounded-md border p-4">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Brain className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Hochgenau-Modus (kostenpflichtig)</span>
+                    <Badge variant={analysisQuality === 'hochgenau' ? 'default' : 'outline'} className="text-[10px]">
+                      {analysisQuality === 'hochgenau' ? 'Gemini Pro aktiv' : 'Gemini Flash (Standard)'}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground max-w-xl">
+                    Aktiviert <span className="font-mono">gemini-2.5-pro</span> für die Plananalyse — liest kleine Beschriftungen
+                    wie „DN&nbsp;10°" zuverlässiger. Verbraucht kostenpflichtiges Gemini-Kontingent und ist etwas langsamer.
+                    Bei erschöpftem Pro-Kontingent fällt die Analyse automatisch auf Flash zurück. Im Standard-Modus bleibt
+                    alles kostenlos; fehlende Neigungen werden deterministisch aus First-/Trauf­höhe und Breite berechnet.
+                  </p>
+                </div>
+                <Switch
+                  checked={analysisQuality === 'hochgenau'}
+                  onCheckedChange={(on) => {
+                    const next: AnalysisQuality = on ? 'hochgenau' : 'standard';
+                    setAnalysisQuality(next);
+                    setAnalysisQualityState(next);
+                    toast({
+                      title: on ? 'Hochgenau-Modus aktiviert' : 'Standard-Modus aktiv',
+                      description: on
+                        ? 'Neue Analysen nutzen Gemini Pro (kostenpflichtig).'
+                        : 'Neue Analysen nutzen Gemini Flash (kostenlos) + Geometrie-Schiedsrichter.',
+                    });
+                  }}
+                />
+              </div>
             </SectionCard>
 
             <SectionCard title="Neue Einstellung hinzufügen" subtitle="API-Key oder Konfigurationsparameter erstellen">

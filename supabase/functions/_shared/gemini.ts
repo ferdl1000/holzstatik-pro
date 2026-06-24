@@ -29,10 +29,23 @@ function getKey(): string {
   return key;
 }
 
+/**
+ * Modell-Kaskade bestimmen.
+ * - kein Modell  → Standard-Flash-Kaskade (kostenlos, schnell)
+ * - gemini-2.5-pro → Pro zuerst (Hochgenau-Modus), dann Flash-Fallback bei Quota/Fehler.
+ *   So bleibt der Hochgenau-Modus robust: wenn Pro-Quota erschöpft ist, fällt er
+ *   automatisch auf Flash zurück statt hart zu scheitern.
+ * - explizites Flash-Modell → dieses zuerst, dann übliche Fallbacks.
+ */
+function buildCascade(model?: string): string[] {
+  const FLASH_FALLBACK = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-2.0-flash-lite'];
+  if (!model) return FLASH_FALLBACK;
+  if (model === 'gemini-2.5-pro') return ['gemini-2.5-pro', ...FLASH_FALLBACK];
+  return [model, ...FLASH_FALLBACK.filter(m => m !== model)];
+}
+
 export async function geminiText(req: GeminiTextRequest): Promise<string> {
-  const modelCandidates = req.model
-    ? [req.model]
-    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-2.0-flash-lite'];
+  const modelCandidates = buildCascade(req.model);
   const body = {
     contents: [{ parts: [{ text: req.userPrompt }] }],
     systemInstruction: { parts: [{ text: req.systemPrompt }] },
@@ -67,11 +80,9 @@ export async function geminiText(req: GeminiTextRequest): Promise<string> {
 }
 
 export async function geminiVision(req: GeminiVisionRequest): Promise<string> {
-  // Modell-Fallback-Kaskade gegen Quota-Limits
-  // gemini-2.0-flash-exp hat höhere Free-Tier-Limits als gemini-2.0-flash
-  const modelCandidates = req.model
-    ? [req.model]
-    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-2.0-flash-lite'];
+  // Modell-Fallback-Kaskade gegen Quota-Limits.
+  // gemini-2.5-pro (Hochgenau) fällt automatisch auf Flash zurück, falls Quota erschöpft.
+  const modelCandidates = buildCascade(req.model);
 
   const body = {
     contents: [{

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
+import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -107,7 +108,7 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
 
     try {
       const { data, error } = await supabase.functions.invoke('agent-orchestrator', {
-        body: { documentId: docId, projectId },
+        body: { documentId: docId, projectId, analysisQuality: getAnalysisQuality() },
       });
       clearInterval(progressInterval);
 

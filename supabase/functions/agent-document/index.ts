@@ -677,26 +677,16 @@ Diese Werte wurden deterministisch per Regex aus dem rohen OCR-Text extrahiert:
 REGELN: Verwende diese Werte als Primärquelle. Wenn DN-Marker vorhanden, NIEMALS selbst berechnen!`
     : '';
 
-  // --- Stage 1: Inventur ---
-  const stage1Text = await geminiVision({
-    systemPrompt: STAGE1_PROMPT,
-    userPrompt: `Analysiere den Einreichplan "${fileName}" und liefere die Inventur als JSON.${hardFactsHint}`,
-    fileBase64: base64,
-    mimeType: 'application/pdf',
-    jsonMode: true,
-    maxTokens: 8192,
-    model: 'gemini-2.5-flash',
-  });
-  const stage1 = parseJsonResponse<Record<string, unknown>>(stage1Text);
-  stageLog.stages.push({
-    stage: 1, status: 'ok',
-    summary: `${(stage1.roofParts_inventory as unknown[] | undefined)?.length ?? 0} Dachteile, ${(stage1.dn_marker as unknown[] | undefined)?.length ?? 0} DN-Marker, ${(stage1.aufbauten_legende as unknown[] | undefined)?.length ?? 0} Aufbauten`,
-  });
+  // ═══════════════════════════════════════════════════════════════════════
+  // SCHNELL-PFAD: Wenn OCR harte Fakten lieferte (DN-Marker da), reicht EINE
+  // Interpretation statt 3 Stages — spart Zeit (150s Edge-Limit) + Quota.
+  // ═══════════════════════════════════════════════════════════════════════
+  const ocrOk = ocrText.length > 100 && facts.dnMarkers.length > 0;
 
-  // --- Stage 2: Details ---
+  // --- Stage 2 (Haupt-Interpretation) — IMMER nötig ---
   const stage2Text = await geminiVision({
     systemPrompt: STAGE2_PROMPT,
-    userPrompt: `Stage-1-Inventur:\n${JSON.stringify(stage1, null, 2)}\n\nAnalysiere den Plan "${fileName}" und liefere Stage-2-Details.${hardFactsHint}`,
+    userPrompt: `Analysiere den Plan "${fileName}" und liefere ALLE Details als JSON (roofParts mit Geometrie, ceilings, covering, addresses, structureHints, dimensions, openings, stairs, specialFeatures, planQuality).${hardFactsHint}`,
     fileBase64: base64,
     mimeType: 'application/pdf',
     jsonMode: true,
@@ -709,42 +699,45 @@ REGELN: Verwende diese Werte als Primärquelle. Wenn DN-Marker vorhanden, NIEMAL
     summary: `${(stage2.roofParts as unknown[] | undefined)?.length ?? 0} roofParts, ${(stage2.ceilings as unknown[] | undefined)?.length ?? 0} ceilings`,
   });
 
-  // --- Stage 3: Validation ---
-  // Stage1-DN-Marker explizit in Stage3-Prompt einbetten damit KI sie nicht übersieht
-  const stage1DnSummary = (stage1.dn_marker as Array<{value: number; evidence?: string}> | undefined ?? [])
-    .map(m => `DN ${m.value}° (${m.evidence ?? 'aus Inventur'})`).join(', ');
-  const dnHint = stage1DnSummary
-    ? `\n\n=== KRITISCH: Stage-1 hat folgende DN-Marker gefunden: ${stage1DnSummary} ===\nDiese DN-Werte MÜSSEN in den roofParts pitch-Werten vorkommen!`
-    : '';
-  const stage3Text = await geminiVision({
-    systemPrompt: STAGE3_PROMPT,
-    userPrompt: `Stage-2-Ergebnis:\n${JSON.stringify(stage2, null, 2)}${dnHint}\n\nValidiere und korrigiere gegen den Plan "${fileName}".`,
-    fileBase64: base64,
-    mimeType: 'application/pdf',
-    jsonMode: true,
-    maxTokens: 32000,
-    model: 'gemini-2.5-flash',
-  });
-  const stage3 = parseJsonResponse<Record<string, unknown>>(stage3Text);
-  stageLog.stages.push({
-    stage: 3, status: 'ok',
-    summary: `Finale Konfidenz: ${(((stage3.overallConfidence as number | undefined) ?? 0) * 100).toFixed(0)}%`,
-  });
+  let stage3: Record<string, unknown>;
+  if (ocrOk) {
+    // Schnell-Pfad: harte Fakten sind verlässlich → keine Validation-Stage nötig.
+    // applyHardFacts (unten) erzwingt die Fakten ohnehin deterministisch.
+    stage3 = stage2;
+    stageLog.stages.push({ stage: 3, status: 'skipped-ocr-fast', summary: 'OCR-Fakten verlässlich → Validation übersprungen' });
+    stage3._analysisMethod = 'ocr-first-fast';
+  } else {
+    // Langsam-Pfad: kein verlässlicher OCR → Validation-Stage zur Absicherung
+    const stage3Text = await geminiVision({
+      systemPrompt: STAGE3_PROMPT,
+      userPrompt: `Stage-2-Ergebnis:\n${JSON.stringify(stage2, null, 2)}\n\nValidiere und korrigiere gegen den Plan "${fileName}".`,
+      fileBase64: base64,
+      mimeType: 'application/pdf',
+      jsonMode: true,
+      maxTokens: 32000,
+      model: 'gemini-2.5-flash',
+    });
+    stage3 = parseJsonResponse<Record<string, unknown>>(stage3Text);
+    stageLog.stages.push({
+      stage: 3, status: 'ok',
+      summary: `Finale Konfidenz: ${(((stage3.overallConfidence as number | undefined) ?? 0) * 100).toFixed(0)}%`,
+    });
+    stage3._analysisMethod = 'multi-stage-validated';
+  }
 
-  // Stage-3 ist final — Metadaten anhängen
+  // Metadaten anhängen
   stage3._multiStageLog = stageLog;
-  stage3._analysisMethod = 'multi-stage-3';
   // Harte Fakten für Debugging + Konsens-Engine speichern
   stage3.parsedFacts = facts;
 
-  // ── DN-Marker aus Stage 1 explizit auf roofParts mappen ──────────────────
-  // Fallback-Kette: Stage1.dn_marker → Stage2.dn_markers → Stage3.dn_markers
-  const dnMarkersStage1 = (stage1.dn_marker as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
+  // ── DN-Marker auf roofParts mappen ──────────────────
+  // Primärquelle: OCR-Text-Parser (facts.dnMarkers, deterministisch!), dann KI-Stages.
+  const dnMarkersOcr = facts.dnMarkers.map(d => ({ value: d.value, evidence: d.raw }));
   const dnMarkersStage2 = (stage2.dn_markers as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
   const dnMarkersStage3 = (stage3.dn_markers as Array<{ value: number; near_roofpart?: string; near_roofpart_index?: number; evidence?: string }> | undefined) ?? [];
-  // Nutze Stage1 als Primärquelle, dann Stage2, dann Stage3 (letzte Chance)
-  const dnMarkers = dnMarkersStage1.length > 0
-    ? dnMarkersStage1
+  // OCR hat Vorrang (deterministisch), dann Stage2, dann Stage3
+  const dnMarkers = dnMarkersOcr.length > 0
+    ? dnMarkersOcr
     : dnMarkersStage2.length > 0
       ? dnMarkersStage2
       : dnMarkersStage3;
@@ -802,7 +795,10 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
   try {
-    const { documentId, projectId, retryWith, focusOnMissing, useMultiStage } = await req.json();
+    const { documentId, projectId, retryWith, focusOnMissing, useMultiStage, analysisQuality } = await req.json();
+    // Hochgenau-Modus: gemini-2.5-pro für den Vision-Hauptcall (kostenpflichtig, höhere Lese-Genauigkeit).
+    // Standard (default): gemini-2.5-flash (kostenlos). Pro fällt bei Quota automatisch auf Flash zurück.
+    const primaryVisionModel = analysisQuality === 'hochgenau' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
     if (!documentId || !projectId) {
       return new Response(JSON.stringify({ error: 'documentId und projectId erforderlich' }),
         { status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
@@ -835,53 +831,97 @@ serve(async (req) => {
     let analysisMethod: string;
 
     if (multiStage && !retryWith) {
-      // Multi-Stage Analyse mit Quota-Fallback
+      // ── SINGLE-COMBINED-CALL (schnell, 1 Gemini-Call, deterministische Fakten) ──
+      // Ein Vision-Call liefert rawText (für Regex-Parser) UND strukturierte Daten.
+      // Vermeidet das 150s-Edge-Limit das bei mehreren Vision-Calls auftritt.
       try {
-        extracted = await analyzeDocumentMultiStage(base64, doc.file_name);
-        analysisMethod = 'multi-stage-3';
-      } catch (multiStageErr) {
-        // Graceful Fallback auf Single-Stage wenn Quota-Fehler
-        const errMsg = multiStageErr instanceof Error ? multiStageErr.message : String(multiStageErr);
+        const combinedPrompt = `${SYSTEM}
+
+=== ZUSÄTZLICH: ROHTEXT + DACHNEIGUNGEN ===
+Füge dem JSON zwei zusätzliche Felder hinzu:
+
+1. "_rawText": ALLER sichtbare Text aus dem Plan (Beschriftungen, Maße, Legenden,
+   DN-Angaben, ÜBERDACHUNG-Texte, Aufbauten-Codes, Adressen). Vollständig, Zeile für Zeile.
+
+2. "_dachneigungen": ein Array ALLER im Plan gefundenen Dachneigungs-Werte in Grad.
+   KRITISCH WICHTIG: Suche SEHR GENAU nach Dachneigungs-Angaben! Diese stehen als:
+   - "DN 10°", "DN=22°", "DN 5°" (DN = Dachneigung, sehr häufig in AT-Plänen!)
+   - "Dachneigung 10°", "10° Dachneigung"
+   - kleine Gradzahlen neben Dachlinien im Schnitt/in Ansichten
+   - "X% Gefälle" (bei Flachdächern)
+   Schau in JEDEN Schnitt, JEDE Ansicht, JEDES Dachsymbol.
+   Beispiel: wenn du "DN 10°" 5× im Plan siehst → "_dachneigungen": [10]
+   Wenn Hauptdach 10° und Vordach 5° → "_dachneigungen": [10, 5]
+   Diese Werte sind WICHTIGER als alles andere — finde sie unbedingt!`;
+        const text = await geminiVision({
+          systemPrompt: combinedPrompt,
+          userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}. Liefere das vollständige JSON inkl. _rawText.`,
+          fileBase64: base64,
+          mimeType: 'application/pdf',
+          jsonMode: true,
+          maxTokens: 60000,
+          model: primaryVisionModel,
+        });
+        extracted = parseJsonResponse<Record<string, unknown>>(text);
+        analysisMethod = `single-combined-${primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash'}`;
+        extracted._analysisMethod = analysisMethod;
+
+        // Deterministischer Parser auf MEHRERE Textquellen:
+        // _rawText + alle texts[].content + Eindeckungs-Evidenz zusammenführen,
+        // damit DN-Marker gefunden werden egal wo die KI sie ablegte.
+        const rawText = (extracted._rawText as string) || '';
+        const textsContent = Array.isArray(extracted.texts)
+          ? (extracted.texts as Array<{content?: string}>).map(t => t.content || '').join('\n')
+          : '';
+        const combinedText = `${rawText}\n${textsContent}`;
+        const facts = parseAllFacts(combinedText);
+
+        // Zusätzlich: KI-geliefertes _dachneigungen-Array als DN-Quelle nutzen,
+        // falls der Regex-Parser nichts fand (KI sieht manchmal mehr als der Text-Dump zeigt).
+        const kiDn = extracted._dachneigungen;
+        if (facts.dnMarkers.length === 0 && Array.isArray(kiDn)) {
+          for (const v of kiDn as number[]) {
+            if (typeof v === 'number' && v > 0 && v <= 75) {
+              facts.dnMarkers.push({ value: v, raw: `_dachneigungen: ${v}°`, source: 'DN' });
+            }
+          }
+        }
+        extracted.parsedFacts = facts;
+        applyHardFacts(extracted, facts);
+      } catch (combinedErr) {
+        const errMsg = combinedErr instanceof Error ? combinedErr.message : String(combinedErr);
         const isQuotaError = errMsg.includes('429') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted');
         if (isQuotaError) {
-          console.warn('Multi-Stage Quota-Fehler, Fallback auf Single-Stage:', errMsg);
-          const userPrompt = focusOnMissing
-            ? `Analysiere diesen Einreichplan NOCHMALS SEHR SORGFÄLTIG: ${doc.file_name}.\nACHTE BESONDERS AUF: Dachneigung (°), Gebäudegeometrie (Länge/Breite/Firsthöhe/Traufhöhe), Schnittdarstellungen, Bemaßungslinien.\nLiefere JSON laut System-Prompt.`
-            : `Analysiere diesen Einreichplan: ${doc.file_name}. Liefere JSON laut System-Prompt.`;
+          // Quota: einfacher Single-Call ohne _rawText, mit DN-Marker-Post-Processing
+          console.warn('Combined-Call Quota-Fehler, Minimal-Fallback:', errMsg);
           const text = await geminiVision({
             systemPrompt: SYSTEM,
-            userPrompt,
+            userPrompt: `Analysiere diesen Einreichplan: ${doc.file_name}. Liefere JSON laut System-Prompt.`,
             fileBase64: base64,
             mimeType: 'application/pdf',
             jsonMode: true,
-            maxTokens: 80000,
+            maxTokens: 60000,
           });
           extracted = parseJsonResponse<Record<string, unknown>>(text);
           extracted._analysisMethod = 'single-stage-quota-fallback';
           analysisMethod = 'single-stage-quota-fallback';
-          // DN-Marker post-processing (quota fallback)
           applyDnMarkers(extracted);
-          // OCR-Pass für Fallback (best-effort)
-          try {
-            const ocrFallback = await geminiVision({
-              systemPrompt: OCR_PROMPT,
-              userPrompt: `Extrahiere allen Text aus: ${doc.file_name}`,
-              fileBase64: base64, mimeType: 'application/pdf',
-              jsonMode: false, maxTokens: 16000, model: 'gemini-2.5-flash',
-            });
-            const factsFallback = parseAllFacts(ocrFallback);
-            extracted.parsedFacts = factsFallback;
-            applyHardFacts(extracted, factsFallback);
-          } catch { /* quota — kein OCR-Pass, facts bleibt leer */ }
+          // Rohtext aus dem Ergebnis falls vorhanden
+          const rawFb = (extracted._rawText as string) || '';
+          if (rawFb.length > 50) {
+            const factsFb = parseAllFacts(rawFb);
+            extracted.parsedFacts = factsFb;
+            applyHardFacts(extracted, factsFb);
+          }
         } else {
-          throw multiStageErr;
+          throw combinedErr;
         }
       }
     } else {
       // Single-Stage (explizit deaktiviert oder retryWith)
       const userPrompt = focusOnMissing
-        ? `Analysiere diesen Einreichplan NOCHMALS SEHR SORGFÄLTIG: ${doc.file_name}.\nACHTE BESONDERS AUF: Dachneigung (°), Gebäudegeometrie (Länge/Breite/Firsthöhe/Traufhöhe), Schnittdarstellungen, Bemaßungslinien.\nLiefere JSON laut System-Prompt.`
-        : `Analysiere diesen Einreichplan: ${doc.file_name}. Liefere JSON laut System-Prompt.`;
+        ? `Analysiere diesen Einreichplan NOCHMALS SEHR SORGFÄLTIG: ${doc.file_name}.\nACHTE BESONDERS AUF: Dachneigung (°), Gebäudegeometrie (Länge/Breite/Firsthöhe/Traufhöhe), Schnittdarstellungen, Bemaßungslinien.\nFüge ein Feld "_rawText" mit allem sichtbaren Text hinzu.\nLiefere JSON laut System-Prompt.`
+        : `Analysiere diesen Einreichplan: ${doc.file_name}. Füge ein Feld "_rawText" mit allem sichtbaren Text hinzu. Liefere JSON laut System-Prompt.`;
       const text = await geminiVision({
         systemPrompt: SYSTEM,
         userPrompt,
@@ -893,20 +933,14 @@ serve(async (req) => {
       });
       extracted = parseJsonResponse<Record<string, unknown>>(text);
       analysisMethod = retryWith ? `single-stage-${retryWith}` : 'single-stage';
-      // DN-Marker post-processing (single-stage)
       applyDnMarkers(extracted);
-      // OCR-Pass für Single-Stage (best-effort)
-      try {
-        const ocrSingle = await geminiVision({
-          systemPrompt: OCR_PROMPT,
-          userPrompt: `Extrahiere allen Text aus: ${doc.file_name}`,
-          fileBase64: base64, mimeType: 'application/pdf',
-          jsonMode: false, maxTokens: 16000, model: 'gemini-2.5-flash',
-        });
-        const factsSingle = parseAllFacts(ocrSingle);
+      // Rohtext-Parser falls _rawText im Ergebnis
+      const rawSingle = (extracted._rawText as string) || '';
+      if (rawSingle.length > 50) {
+        const factsSingle = parseAllFacts(rawSingle);
         extracted.parsedFacts = factsSingle;
         applyHardFacts(extracted, factsSingle);
-      } catch { /* quota — kein OCR-Pass */ }
+      }
     }
 
     await supabase.from('documents').update({ status: 'analyzed', extracted_data: extracted }).eq('id', documentId);

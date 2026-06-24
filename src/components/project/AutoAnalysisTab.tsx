@@ -10,6 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { loadApplicableRules, applyRules } from '@/lib/learning/captureCorrection';
+import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
 import {
   Sparkles, Loader2, ChevronDown, ChevronUp,
   CheckCircle2, AlertTriangle, XCircle,
@@ -122,7 +123,7 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
             setProgressLabel(`KI-Analyse Plan ${i + 1}/${docs.length}: ${doc.file_name} …`);
             try {
               const { error: orchError } = await supabase.functions.invoke('agent-orchestrator', {
-                body: { projectId, documentId: doc.id },
+                body: { projectId, documentId: doc.id, analysisQuality: getAnalysisQuality() },
               });
               if (orchError) {
                 console.warn(`KI-Analyse fehlgeschlagen für ${doc.file_name}:`, orchError);

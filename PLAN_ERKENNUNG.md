@@ -179,3 +179,5 @@ GK aus Gebäudedaten ableitbar:
 - 2026-05-23 | Lechner Stallgebäude | pitch 30° statt 10° | DN 10° per OCR | DN-Marker hat Vorrang, OCR-First
 - 2026-05-23 | Lechner | form satteldach statt pultdach | pitch<12° | Pultdach-Heuristik bei flacher Neigung
 - 2026-05-23 | Lebenbauer | STB-Decke als Holzbalkendecke | constructionType | STB-Decken nicht im Holzauszug
+- 2026-06-24 | Lechner Stallgebäude | Gemini Flash halluzinierte DN=22° | Geometrie-Schiedsrichter | DN-Marker (10°) wird nur akzeptiert wenn er ±5° zur Geometrie passt (geomPult=atan(rise/width), geomSattel=atan(rise/(width/2))). Lechner: rise=1.61m, width=8m → geomPult=11.4° → 10° bestätigt → Pultdach. Verifiziert: 3 saubere Dachteile (Hauptdach Pultdach 10°, 2× Vordach Flachdach 2°), Lauf 104s < 150s-Limit.
+- 2026-06-24 | Genauigkeits-Modus | Flash kann kleine DN-Beschriftungen verfehlen | analysisQuality-Flag | Admin-Schalter "Hochgenau" → gemini-2.5-pro (kostenpflichtig) für Vision-Hauptcall, fällt bei Quota automatisch auf Flash zurück. Default bleibt Flash + Geometrie-Schiedsrichter (kostenlos).

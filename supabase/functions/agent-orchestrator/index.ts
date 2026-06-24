@@ -13,7 +13,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
   try {
-    const { projectId, documentId } = await req.json();
+    const { projectId, documentId, analysisQuality } = await req.json();
     if (!projectId || !documentId) {
       return new Response(JSON.stringify({ error: 'projectId und documentId erforderlich' }),
         { status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
@@ -183,7 +183,7 @@ serve(async (req) => {
 
     // === 1. Dokument-Agent (First-Pass) ===
     log.push(`[${new Date().toISOString()}] ▶ Dokumenten-Agent First-Pass (Gemini Vision)…`);
-    const docResult = await safeCallAgent('agent-document', { projectId, documentId });
+    const docResult = await safeCallAgent('agent-document', { projectId, documentId, analysisQuality });
     let extracted: Record<string, any>;
     if (!docResult.ok) {
       log.push(`✗ Dokument-Agent: ${docResult.error}`);
@@ -205,8 +205,13 @@ serve(async (req) => {
     }
     log.push(`✓ First-Pass: ${extracted.texts?.length || 0} Texte, ${extracted.dimensions?.length || 0} Maße, Konfidenz ${((extracted.overallConfidence as number || 0) * 100).toFixed(0)}%`);
 
+    // OCR-Fakten sind deterministisch — wenn DN-Marker da sind, ist alles Wichtige sicher.
+    // Dann KEINE teuren Zusatz-Pässe (spart Zeit gegen 150s-Edge-Limit + Quota).
+    const ocrFacts = (extracted.parsedFacts as any) || {};
+    const ocrDnClear = Array.isArray(ocrFacts.dnMarkers) && ocrFacts.dnMarkers.length > 0;
+
     // === 1b. Second-Pass (Multi-Pass-Strategie bei niedriger Konfidenz) ===
-    const needsSecondPass = docResult.ok && (
+    const needsSecondPass = !ocrDnClear && docResult.ok && (
       (extracted.overallConfidence as number || 0) < 0.6 ||
       (extracted.planQuality as any)?.legibility === 'low'
     );
@@ -245,7 +250,7 @@ serve(async (req) => {
             .filter(d => d.label?.toLowerCase().includes('dachneigung') || d.label?.toLowerCase().includes('neigung'))
             .map(d => ({ value: d.value }));
 
-      if (docResult.ok && needsConsensusPass(extracted, { dnMarkers: factsDnMarkers })) {
+      if (!ocrDnClear && docResult.ok && needsConsensusPass(extracted, { dnMarkers: factsDnMarkers })) {
         log.push(`[${new Date().toISOString()}] ▶ Konsens-Pass: DN unklar (${factsDnMarkers.map(m => m.value + '°').join(', ') || 'kein DN'}) oder Konfidenz < 0.7 — starte 2. Analyse…`);
         const consensusResult = await safeCallAgent('agent-document', {
           projectId, documentId, retryWith: 'gemini-2.5-flash', focusOnMissing: false,
@@ -468,6 +473,13 @@ serve(async (req) => {
     const factDnMarkers: Array<{ value: number }> = facts.dnMarkers ?? [];
 
     let extractedRoofParts = (extracted.roofParts as Array<any> | undefined) ?? [];
+    // Kaputte/leere KI-Dachteile verwerfen (kein label ODER alle Maße 0)
+    extractedRoofParts = extractedRoofParts.filter((rp: any) => {
+      const hasLabel = rp.label && rp.label !== 'undefined';
+      const len = rp.length ?? rp.geometry?.length ?? 0;
+      const wid = rp.width ?? rp.geometry?.width ?? 0;
+      return hasLabel && (len > 0 || wid > 0);
+    });
 
     // Geometrie-Fallback aus dimensions (für synthetische Dachteile)
     const dimsArr = (extracted.dimensions || []) as Array<{label?: string; value: number}>;
@@ -522,31 +534,79 @@ serve(async (req) => {
       log.push(`⚠ Multi-Roof-Garantie: Text fand ${factUeberCount} Überdachung(en), KI nur ${kiVordachCount} → ${missing} synthetisch ergänzt`);
     }
 
-    // GARANTIE 3: Dachneigungen pro Dachteil aus DN-Markern erzwingen.
-    // Wenn mehrere unterschiedliche DN-Werte → den Dachteilen zuordnen (index-basiert).
-    if (factDnMarkers.length > 0) {
-      const uniquePitches = [...new Set(factDnMarkers.map(m => m.value))];
-      extractedRoofParts.forEach((rp: any, idx: number) => {
-        // Marker-Zuordnung: bei genau 1 eindeutigem Wert → alle Hauptdächer kriegen ihn;
-        // bei mehreren → index-basiert (Hauptdach = erster, Vordach = nächster)
-        let assignedPitch: number;
-        if (uniquePitches.length === 1) {
-          // Ein einziger DN-Wert im Plan: nur Hauptdach kriegt ihn, Vordach bleibt wie erkannt/flach
-          assignedPitch = rp.kind === 'main' ? uniquePitches[0] : (rp.pitch ?? 0);
+    // GARANTIE 3: GEOMETRIE-SCHIEDSRICHTER für Dachneigung.
+    // KI-DN-Werte werden NICHT blind übernommen (Gemini halluziniert manchmal).
+    // Stattdessen: deterministische Neigung aus First/Traufe/Breite berechnen,
+    // KI-DN nur akzeptieren wenn es zur Geometrie passt. Sonst Geometrie + unsicher.
+    const dnUniq = [...new Set(factDnMarkers.map(m => m.value))];
+    const uncertainPitchParts: string[] = [];
+    extractedRoofParts.forEach((rp: any, idx: number) => {
+      const len = rp.length ?? rp.geometry?.length ?? 0;
+      const wid = rp.width ?? rp.geometry?.width ?? 0;
+      const ridge = rp.ridgeHeight ?? rp.geometry?.ridgeHeight ?? 0;
+      const eaves = rp.eavesHeight ?? rp.geometry?.eavesHeight ?? 0;
+      const rise = ridge - eaves;
+
+      // Geometrie-Neigung berechnen (deterministisch)
+      let geomPitchPult = 0, geomPitchSattel = 0;
+      if (wid > 0 && rise > 0.05) {
+        geomPitchPult = Math.round(Math.atan2(rise, wid) * 180 / Math.PI * 10) / 10;        // über volle Breite
+        geomPitchSattel = Math.round(Math.atan2(rise, wid / 2) * 180 / Math.PI * 10) / 10;  // über halbe Breite
+      }
+
+      // KI-DN-Kandidat (eindeutig oder index-basiert)
+      const kiDn = dnUniq.length === 1
+        ? (rp.kind === 'main' ? dnUniq[0] : (factDnMarkers[idx]?.value ?? null))
+        : (factDnMarkers[idx]?.value ?? null);
+
+      let finalPitch: number;
+      let pitchSource: string;
+
+      if (rise <= 0.05 && wid > 0) {
+        // praktisch flach
+        finalPitch = 2; rp.form = 'flachdach'; pitchSource = 'flach (First≈Traufe)';
+      } else if (kiDn != null && (Math.abs(kiDn - geomPitchPult) <= 5 || Math.abs(kiDn - geomPitchSattel) <= 5)) {
+        // KI-DN passt zur Geometrie → vertrauenswürdig
+        finalPitch = kiDn; pitchSource = `DN-Marker ${kiDn}° (geometrie-bestätigt)`;
+        // Form aus dem besser passenden Geometrie-Modell
+        if (Math.abs(kiDn - geomPitchPult) <= Math.abs(kiDn - geomPitchSattel)) {
+          if (rp.form === 'satteldach') rp.form = 'pultdach';
+        }
+      } else if (geomPitchPult > 0) {
+        // KI-DN fehlt oder unplausibel → Geometrie nehmen (deterministisch).
+        // Mehrdeutigkeit: rise/width=0.20 kann 11° Pultdach ODER 22° Satteldach sein.
+        // Heuristik: flaches Dach (rise/width < 0.27, ≈ Pultdach <15° / Sattel <30°)
+        // → Pultdach (typisch für Ställe/Gewerbe/Vordächer). Steiler → Satteldach.
+        const flatness = rise / wid;
+        const kiSaysPult = rp.form === 'pultdach';
+        const kiSaysSattel = rp.form === 'satteldach' || rp.form === 'walmdach' || rp.form === 'krueppelwalmdach';
+        if (flatness < 0.27 && !kiSaysSattel) {
+          // flaches Dach → Pultdach (außer KI ist sich sehr sicher dass Satteldach)
+          finalPitch = geomPitchPult; rp.form = 'pultdach';
+          pitchSource = `Geometrie-Pultdach ${geomPitchPult}° (flach, rise/width=${flatness.toFixed(2)})`;
+        } else if (kiSaysPult) {
+          finalPitch = geomPitchPult; pitchSource = `Geometrie-Pultdach ${geomPitchPult}° (KI-Form)`;
         } else {
-          // Mehrere DN-Werte: index-basiert zuordnen
-          assignedPitch = factDnMarkers[idx]?.value ?? rp.pitch ?? uniquePitches[0];
+          finalPitch = geomPitchSattel; if (!rp.form || rp.form === 'flachdach') rp.form = 'satteldach';
+          pitchSource = `Geometrie-Satteldach ${geomPitchSattel}°`;
         }
-        if (typeof assignedPitch === 'number' && assignedPitch >= 0) {
-          if (rp.pitch !== assignedPitch) {
-            rp.pitch = assignedPitch;
-          }
-          // Form-Konsistenz erzwingen
-          if (assignedPitch <= 5) rp.form = 'flachdach';
-          else if (assignedPitch < 12 && rp.form === 'satteldach') rp.form = 'pultdach';
-        }
-      });
-      log.push(`✓ Multi-Roof-Garantie: DN-Marker [${uniquePitches.join('°, ')}°] auf ${extractedRoofParts.length} Dachteil(e) angewandt`);
+        uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
+      } else {
+        finalPitch = kiDn ?? rp.pitch ?? 30;
+        pitchSource = kiDn != null ? `DN ${kiDn}° (ungeprüft)` : 'Default 30°';
+        uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
+      }
+
+      rp.pitch = finalPitch;
+      rp._pitchSource = pitchSource;
+      // Form-Konsistenz
+      if (finalPitch <= 5 && rp.form !== 'flachdach') rp.form = 'flachdach';
+    });
+    log.push(`✓ Geometrie-Schiedsrichter: Neigungen ${extractedRoofParts.map((r:any)=>r.pitch+'°').join(', ')} (DN-Marker: ${dnUniq.length?dnUniq.join('°,')+'°':'keine'})`);
+    if (uncertainPitchParts.length > 0) {
+      const w = `Dachneigung aus Geometrie berechnet (kein verlässlicher DN-Marker gelesen): ${uncertainPitchParts.join(', ')} — bitte gegen Plan prüfen`;
+      extracted.unreliableAreas = [...(extracted.unreliableAreas as string[] || []), w];
+      log.push(`⚠ ${w}`);
     }
 
     // roofParts in projectUpdate schreiben
