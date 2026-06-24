@@ -251,8 +251,25 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
 
   const status = result ? overallStatus(result) : null;
 
+  const degraded = (project as any).extractionDegraded === true;
+
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
+      {/* ── Degradierte-Extraktion-Banner (ehrliche Unsicherheit) ───── */}
+      {degraded && (
+        <div className="rounded-md border border-status-yellow/40 bg-status-yellow-bg p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-status-yellow shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-medium text-status-yellow">Plan möglicherweise nicht vollständig gelesen</p>
+            <p className="text-xs text-foreground/70 mt-1">
+              Die KI hat bei diesem Plan auffällig wenig erkannt. Bitte die erkannten Werte gegen
+              den Plan prüfen. Tipp: Analyse erneut starten oder im Admin den{' '}
+              <span className="font-medium">Hochgenau-Modus (Gemini Pro)</span> aktivieren.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Header Card ─────────────────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-3">

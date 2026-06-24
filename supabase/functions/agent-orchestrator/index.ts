@@ -242,6 +242,42 @@ serve(async (req) => {
     const ocrFacts = (extracted.parsedFacts as any) || {};
     const ocrDnClear = Array.isArray(ocrFacts.dnMarkers) && ocrFacts.dnMarkers.length > 0;
 
+    // === 1a-GUARD: Degradierte Extraktion erkennen (Ehrlichkeit statt falscher Sicherheit) ===
+    // Ein eindeutiger DN-Marker heißt NICHT, dass der ganze Plan vollständig gelesen wurde.
+    // Bei auffällig dünner Extraktion (wenige Texte/Maße, Quota-Fallback) wird das Ergebnis
+    // NICHT als "sicher" ausgegeben, sondern als möglicherweise unvollständig markiert —
+    // der Nutzer kann dann erneut analysieren oder den Hochgenau-Modus (Pro) wählen.
+    {
+      // Echtes Signal messen, NICHT texts[].length: der Hauptinhalt liegt im _rawText
+      // (vom deterministischen Parser konsumiert). Degradiert ist nur, wenn ALLE Quellen
+      // dünn sind: kaum Rohtext UND wenige Maße UND keine Fakten aus dem Text-Parser.
+      const rawTextLen = String(extracted._rawText ?? '').length;
+      const nDims = (extracted.dimensions as unknown[] | undefined)?.length ?? 0;
+      const pf = (extracted.parsedFacts as any) || {};
+      const factSignal =
+        (Array.isArray(pf.dnMarkers) ? pf.dnMarkers.length : 0) +
+        (Array.isArray(pf.dimensions) ? pf.dimensions.length : 0) +
+        (Number(pf.ueberdachungCount) || 0) +
+        (Array.isArray(pf.postalCodes) ? pf.postalCodes.length : 0) +
+        (Array.isArray(pf.aufbautenCodes) ? pf.aufbautenCodes.length : 0);
+      const method = String(extracted._analysisMethod ?? '');
+      const usedFallback = /quota|fallback|lite/i.test(method);
+      // Wirklich dünn: wenig Rohtext UND wenig Maße UND kaum Text-Parser-Fakten.
+      const trulyThin = rawTextLen < 300 && nDims < 3 && factSignal < 3;
+      if (trulyThin || usedFallback) {
+        const reasons: string[] = [];
+        if (trulyThin) reasons.push(`sehr wenig erkannt (Rohtext ${rawTextLen} Z., ${nDims} Maße, ${factSignal} Fakten)`);
+        if (usedFallback) reasons.push('Notfall-Modell (Quota) verwendet');
+        const warn = `Analyse möglicherweise unvollständig (${reasons.join(', ')}). Bitte Werte gegen den Plan prüfen — oder erneut analysieren bzw. Hochgenau-Modus (Pro) im Admin aktivieren.`;
+        extracted.unreliableAreas = [...(extracted.unreliableAreas as string[] || []), warn];
+        extracted.extractionDegraded = true;
+        log.push(`⚠ Degradierte Extraktion: ${reasons.join(', ')} → als unvollständig markiert`);
+      } else {
+        extracted.extractionDegraded = false;
+        log.push(`✓ Extraktions-Tiefe OK (Rohtext ${rawTextLen} Z., ${nDims} Maße, ${factSignal} Text-Fakten)`);
+      }
+    }
+
     // === 1b. Second-Pass (Multi-Pass-Strategie bei niedriger Konfidenz) ===
     const needsSecondPass = !ocrDnClear && docResult.ok && (
       (extracted.overallConfidence as number || 0) < 0.6 ||
@@ -765,6 +801,12 @@ serve(async (req) => {
     if (uncertainFields.length > 0) {
       projectUpdate.uncertainFields = uncertainFields;
       log.push(`⚠ Unsichere Felder gespeichert: ${uncertainFields.join(', ')}`);
+    }
+
+    // Extraktions-Qualität für UI-Banner persistieren (ehrliche Unsicherheit)
+    projectUpdate.extractionDegraded = extracted.extractionDegraded === true;
+    if (Array.isArray(extracted.unreliableAreas) && (extracted.unreliableAreas as string[]).length > 0) {
+      projectUpdate.unreliableAreas = extracted.unreliableAreas;
     }
 
     // === Selbst-Lernen: Adressen + Planer persistieren (für nächsten Lauf + Korrektur-Capture) ===
