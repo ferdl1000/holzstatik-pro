@@ -48,12 +48,25 @@ export function parseDachneigung(text: string): ParsedFacts['dnMarkers'] {
   }
 
   // "Dachneigung 5°", "Dachneigung: 35°", "Dachneigung von 22 Grad"
-  const dnWordRe = /Dachneigung\s*:?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)\s*(?:°|Grad)/gi;
+  // °-Variante zuerst (bevorzugt). ° darf auch OCR-mangled sein (º, ∘, o, Grad).
+  const dnWordRe = /Dachneigung\s*:?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)\s*(?:°|º|∘|Grad)/gi;
   while ((m = dnWordRe.exec(text)) !== null) {
     const v = num(m[1]);
     if (v >= 0 && v <= 75) {
       const key = `DN-${v}`;
       if (!seen.has(key)) { seen.add(key); markers.push({ value: v, raw: m[0], source: 'Dachneigung' }); }
+    }
+  }
+
+  // Fallback OHNE Gradsymbol: "Dachneigung 5" / "DN 10" — auf gescannten/OCR-Plänen
+  // geht das °-Zeichen oft verloren. Das Wort "Dachneigung"/"DN" macht die Gradzahl
+  // eindeutig. Konservativ: 1–60°, und NICHT direkt von einer Einheit (cm/m/%) gefolgt.
+  const dnNoDegRe = /(?:Dachneigung|DN)\s*[:=]?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)(?!\s*(?:[.,]?\d)|\s*(?:cm|mm|m\b|%|°|º|∘|Grad))/gi;
+  while ((m = dnNoDegRe.exec(text)) !== null) {
+    const v = num(m[1]);
+    if (v >= 1 && v <= 60) {
+      const key = `DN-${v}`;
+      if (!seen.has(key)) { seen.add(key); markers.push({ value: v, raw: m[0].trim(), source: 'Dachneigung' }); }
     }
   }
 
