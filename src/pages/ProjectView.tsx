@@ -28,6 +28,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { EMPTY_PROJECT } from '@/data/mockProject';
 import type { Project } from '@/types/project';
 import { runFullValidation, countBySeverity } from '@/lib/validation';
+import { runAutoPipeline } from '@/lib/auto/autoPipeline';
 
 const TAB_CONFIG = [
   { key: 'plan', label: 'Plan', icon: FileText },
@@ -55,6 +56,7 @@ const ProjectView = () => {
   const [project, setProject] = useState<Project>(EMPTY_PROJECT);
   const [dbProject, setDbProject] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [deriving, setDeriving] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -67,14 +69,41 @@ const ProjectView = () => {
     if (data) {
       setDbProject(data);
       const pd = (data.project_data as any) || {};
-      // Spread project_data immer (auch ohne `name`), damit Agent-Updates (address, geometry, â€¦) sichtbar werden
-      setProject({ ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' });
-      // Fallback-Zweig nur falls Spread fehlschlÃ¤gt
-      if (false) {
-        setProject({ ...EMPTY_PROJECT, id: data.id, name: data.name, description: data.description || '' });
-      }
+      const loaded: Project = { ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' };
+      setProject(loaded);
+      // Statik-Modell automatisch ableiten, wenn Basis-Daten da sind aber Bauteile/Lasten fehlen.
+      // So zeigen ALLE Reiter (Tragwerk, Lasten, Berechnung, Kosten, Bauphysik, Werkstatt …)
+      // echte Ergebnisse, ohne dass der Nutzer erst die Komplett-Analyse klicken muss.
+      void ensureModel(loaded, data);
     }
     setLoading(false);
+  }
+
+  /** Erzeugt Bauteile + Lasten + Bemessung aus Geometrie/Dachteilen, falls noch nicht vorhanden. */
+  async function ensureModel(loaded: Project, dbRow: any) {
+    const hasMembers = Array.isArray(loaded.members) && loaded.members.length > 0;
+    const hasRoofParts = Array.isArray((loaded as any).roofParts) && (loaded as any).roofParts.length > 0;
+    const hasGeometry = (loaded.geometry?.width?.value ?? 0) > 0 || (loaded.geometry?.length?.value ?? 0) > 0;
+    if (hasMembers || (!hasRoofParts && !hasGeometry)) return; // schon vollständig oder zu wenig Basis
+    try {
+      setDeriving(true);
+      const result = await runAutoPipeline({ project: loaded, sparrenSpacing: 0.8, useOptimizer: true });
+      const merged: Project = {
+        ...loaded,
+        geometry: result.geometry.geometry,
+        roofType: result.roofType.roofType,
+        structuralSystem: result.structuralSystem.structuralSystem,
+        members: result.calculations.optimizedMembers,
+        loadCases: result.loads.loadCases,
+        ...(result.roofParts ? { roofParts: result.roofParts } as Partial<Project> : {}),
+      };
+      setProject(merged);
+      await supabase.from('projects').update({ project_data: merged as any }).eq('id', dbRow.id);
+    } catch (e) {
+      console.warn('[ProjectView] Auto-Modell-Ableitung fehlgeschlagen:', e);
+    } finally {
+      setDeriving(false);
+    }
   }
 
   const updateProject = useCallback(async (updates: Partial<Project>) => {
@@ -118,6 +147,11 @@ const ProjectView = () => {
               <StatusIndicator status={project.status} size="sm" />
             </div>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              {deriving && (
+                <span className="flex items-center gap-1 text-primary font-medium animate-pulse">
+                  Statik wird berechnet…
+                </span>
+              )}
               {blockerCount.red > 0 && (
                 <span className="flex items-center gap-1 text-[hsl(var(--status-red))] font-medium">
                   <ShieldAlert className="h-3.5 w-3.5" />
