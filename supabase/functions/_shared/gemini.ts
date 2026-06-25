@@ -13,6 +13,8 @@ export interface GeminiTextRequest {
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
+  /** Vision-Auflösung: niedriger = weniger Tokens/schneller bei großen Planblättern. */
+  mediaResolution?: 'MEDIA_RESOLUTION_LOW' | 'MEDIA_RESOLUTION_MEDIUM' | 'MEDIA_RESOLUTION_HIGH';
 }
 
 export interface GeminiVisionRequest extends GeminiTextRequest {
@@ -95,6 +97,11 @@ export async function geminiVision(req: GeminiVisionRequest): Promise<string> {
     generationConfig: {
       temperature: req.temperature ?? 0.1,
       maxOutputTokens: req.maxTokens ?? 8192,
+      // mediaResolution steuert die Vision-Token pro Seite. Große hochauflösende
+      // Planblätter (z.B. 1 Sheet mit ~10 MP) erzeugen sonst zu viele Patches →
+      // >150s Edge-Timeout. MEDIUM halbiert die Tokens, liest aber Beschriftungen
+      // noch zuverlässig. Default-konfigurierbar pro Aufruf.
+      ...(req.mediaResolution ? { mediaResolution: req.mediaResolution } : {}),
       ...(req.jsonMode ? { responseMimeType: 'application/json' } : {}),
     },
   };

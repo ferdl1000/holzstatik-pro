@@ -829,6 +829,11 @@ serve(async (req) => {
     }
     const base64 = btoa(binary);
 
+    // MIME-Typ aus dem Dokument: große Pläne werden client-seitig zu JPEG
+    // heruntergerechnet (downsamplePdf.ts) → Gemini Vision muss image/jpeg erhalten.
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    const docMime = allowedMimes.includes(doc.file_type) ? doc.file_type : 'application/pdf';
+
     let extracted: Record<string, unknown>;
     let analysisMethod: string;
 
@@ -842,8 +847,10 @@ serve(async (req) => {
 === ZUSÄTZLICH: ROHTEXT + DACHNEIGUNGEN ===
 Füge dem JSON zwei zusätzliche Felder hinzu:
 
-1. "_rawText": ALLER sichtbare Text aus dem Plan (Beschriftungen, Maße, Legenden,
-   DN-Angaben, ÜBERDACHUNG-Texte, Aufbauten-Codes, Adressen). Vollständig, Zeile für Zeile.
+1. "_rawText": die WICHTIGEN Beschriftungen KOMPAKT (KEINE Wiederholungen, KEIN
+   Fließtext): alle Maße, DN-/Dachneigungs-Angaben, ÜBERDACHUNG/VORDACH-Texte,
+   Aufbauten-Codes (B1/D1/06/09…), Eindeckungs-Stichworte, Adressen inkl. Planverfasser,
+   Brandschutz (GK/REI). Stichwortartig, nur einmal je Information. MAX ~250 Wörter.
 
 2. "_dachneigungen": ein Array ALLER im Plan gefundenen Dachneigungs-Werte in Grad.
    KRITISCH WICHTIG: Suche SEHR GENAU nach Dachneigungs-Angaben! Diese stehen als:
@@ -859,9 +866,14 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
           systemPrompt: combinedPrompt,
           userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}. Liefere das vollständige JSON inkl. _rawText.`,
           fileBase64: base64,
-          mimeType: 'application/pdf',
+          mimeType: docMime,
           jsonMode: true,
-          maxTokens: 60000,
+          // Output-Tokens begrenzen: die autoregressive Generierung ist der Latenz-
+          // Treiber. Kompakter _rawText + 24k-Limit hält große Pläne unter dem 150s-Limit.
+          maxTokens: 24000,
+          // MEDIUM-Auflösung: große hochauflösende Planblätter (1 Sheet ~10 MP) sonst
+          // >150s. Im Hochgenau-Modus (Pro) volle Auflösung für maximale Lesbarkeit.
+          mediaResolution: primaryVisionModel === 'gemini-2.5-pro' ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
           model: primaryVisionModel,
         });
         extracted = parseJsonResponse<Record<string, unknown>>(text);
@@ -900,7 +912,7 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
             systemPrompt: SYSTEM + rulesBlock,
             userPrompt: `Analysiere diesen Einreichplan: ${doc.file_name}. Liefere JSON laut System-Prompt.`,
             fileBase64: base64,
-            mimeType: 'application/pdf',
+            mimeType: docMime,
             jsonMode: true,
             maxTokens: 60000,
           });
@@ -928,7 +940,7 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
         systemPrompt: SYSTEM + rulesBlock,
         userPrompt,
         fileBase64: base64,
-        mimeType: 'application/pdf',
+        mimeType: docMime,
         jsonMode: true,
         maxTokens: 80000,
         ...(retryWith ? { model: retryWith as 'gemini-2.5-flash' } : {}),

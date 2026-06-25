@@ -10,6 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
+import { downsamplePdfIfLarge } from '@/lib/upload/downsamplePdf';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -153,8 +154,28 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
   // Bug B fix: upload multiple files
   async function uploadFile(file: File) {
     if (!user || !projectId) return;
-    const path = `${user.id}/${projectId}/${Date.now()}_${file.name}`;
-    const { error } = await supabase.storage.from('plan-documents').upload(path, file, { upsert: true });
+
+    // Große Planblätter (>4,5 MB, hochauflösend) vor dem Upload herunterrechnen,
+    // damit die Edge-Function nicht am Memory-/150s-Limit scheitert. Fail-safe:
+    // bei kleinen Dateien oder Fehler bleibt es beim Original.
+    let uploadBlob: Blob = file;
+    let uploadName = file.name;
+    let uploadType = file.type;
+    try {
+      const reduced = await downsamplePdfIfLarge(file);
+      if (reduced) {
+        uploadBlob = reduced.blob;
+        uploadName = reduced.fileName;
+        uploadType = reduced.mimeType;
+        toast({
+          title: `Großer Plan optimiert`,
+          description: `"${file.name}" (${(file.size / 1048576).toFixed(1)} MB) → ${(reduced.blob.size / 1048576).toFixed(1)} MB JPEG für die KI-Analyse.`,
+        });
+      }
+    } catch { /* fail-safe: Original verwenden */ }
+
+    const path = `${user.id}/${projectId}/${Date.now()}_${uploadName}`;
+    const { error } = await supabase.storage.from('plan-documents').upload(path, uploadBlob, { upsert: true, contentType: uploadType });
     if (error) {
       toast({ title: `Upload fehlgeschlagen: ${file.name}`, description: error.message, variant: 'destructive' });
       return;
@@ -162,14 +183,14 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
     const { data: docData } = await supabase.from('documents').insert({
       project_id: projectId,
       user_id: user.id,
-      file_name: file.name,
+      file_name: uploadName,
       file_path: path,
-      file_type: file.type,
-      file_size: file.size,
+      file_type: uploadType,
+      file_size: uploadBlob.size,
       status: 'uploaded',
     }).select('id').single();
 
-    toast({ title: `"${file.name}" hochgeladen`, description: docData?.id ? 'Bereit für die KI-Analyse.' : '' });
+    toast({ title: `"${uploadName}" hochgeladen`, description: docData?.id ? 'Bereit für die KI-Analyse.' : '' });
   }
 
   async function handleFiles(files: FileList | null) {

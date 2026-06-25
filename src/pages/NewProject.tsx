@@ -9,6 +9,7 @@ import { Upload, ArrowRight, FileText, X, Loader2, Plus } from 'lucide-react';
 import { useProjects } from '@/hooks/useProjects';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import { downsamplePdfIfLarge } from '@/lib/upload/downsamplePdf';
 import { useToast } from '@/hooks/use-toast';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -89,10 +90,20 @@ const NewProject = () => {
     let successCount = 0;
     for (const file of files) {
       if (!user) break;
-      const path = `${user.id}/${projectId}/${file.name}`;
+
+      // Große Planblätter vor Upload herunterrechnen (Edge-Memory/150s-Limit). Fail-safe.
+      let upBlob: Blob = file;
+      let upName = file.name;
+      let upType = file.type;
+      try {
+        const reduced = await downsamplePdfIfLarge(file);
+        if (reduced) { upBlob = reduced.blob; upName = reduced.fileName; upType = reduced.mimeType; }
+      } catch { /* Original verwenden */ }
+
+      const path = `${user.id}/${projectId}/${upName}`;
       const { error: uploadError } = await supabase.storage
         .from('plan-documents')
-        .upload(path, file, { upsert: true });
+        .upload(path, upBlob, { upsert: true, contentType: upType });
 
       if (uploadError) {
         toast({
@@ -106,10 +117,10 @@ const NewProject = () => {
       const { error: dbError } = await supabase.from('documents').insert({
         project_id: projectId,
         user_id: user!.id,
-        file_name: file.name,
+        file_name: upName,
         file_path: path,
-        file_type: file.type,
-        file_size: file.size,
+        file_type: upType,
+        file_size: upBlob.size,
         status: 'uploaded',
       });
 
