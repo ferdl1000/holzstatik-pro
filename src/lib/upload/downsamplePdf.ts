@@ -9,12 +9,25 @@
  * der Aufrufer lädt dann einfach die Original-Datei hoch (kein Regressionsrisiko
  * für die bereits funktionierenden Normal-Pläne).
  */
-import * as pdfjsLib from 'pdfjs-dist';
-// Vite: Worker-URL als Asset einbinden
-// @ts-expect-error - ?url import liefert string
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+/**
+ * WICHTIG: pdfjs-dist wird NUR dynamisch (lazy) geladen — niemals statisch.
+ * pdfjs 4.x nutzt sehr neue Browser-APIs (Promise.withResolvers); ein statischer
+ * Import würde die ganze App schon beim Laden in älteren Browsern crashen lassen
+ * (weißer Bildschirm). Lazy geladen wird es nur, wenn wirklich ein großer Plan
+ * heruntergerechnet wird — und Fehler werden abgefangen (Original-Upload).
+ */
+let pdfjsPromise: Promise<typeof import('pdfjs-dist')> | null = null;
+async function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
+  if (!pdfjsPromise) {
+    pdfjsPromise = (async () => {
+      const pdfjsLib = await import('pdfjs-dist');
+      const workerMod = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = (workerMod as { default: string }).default;
+      return pdfjsLib;
+    })();
+  }
+  return pdfjsPromise;
+}
 
 /** Ab dieser Dateigröße wird heruntergerechnet. Kleinere PDFs bleiben unangetastet. */
 export const DOWNSAMPLE_THRESHOLD_BYTES = 4.5 * 1024 * 1024;
@@ -39,6 +52,7 @@ export async function downsamplePdfIfLarge(file: File): Promise<DownsampleResult
     if (!file || file.type !== 'application/pdf') return null;
     if (file.size < DOWNSAMPLE_THRESHOLD_BYTES) return null;
 
+    const pdfjsLib = await loadPdfjs();
     const data = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data }).promise;
     const nPages = Math.min(pdf.numPages, 6); // Sicherheitskappe gegen riesige Mehrseiter
