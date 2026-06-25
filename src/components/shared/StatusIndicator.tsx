@@ -1,21 +1,25 @@
 import { cn } from '@/lib/utils';
 import type { StatusLevel } from '@/types/project';
-import { CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { CheckCircle, AlertTriangle, XCircle, Circle } from 'lucide-react';
 
 interface StatusIndicatorProps {
-  status: StatusLevel;
+  status: StatusLevel | string;
   label?: string;
   size?: 'sm' | 'md' | 'lg';
 }
 
-const STATUS_CONFIG = {
+const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; className: string }> = {
   green: { icon: CheckCircle, label: 'Bestanden', className: 'status-badge-green' },
   yellow: { icon: AlertTriangle, label: 'Prüfung nötig', className: 'status-badge-yellow' },
   red: { icon: XCircle, label: 'Unvollständig', className: 'status-badge-red' },
 };
 
+// Fallback für unbekannte Status-Werte (z.B. 'draft', 'uploaded') — verhindert,
+// dass ein unerwarteter Status die ganze Oberfläche crasht.
+const DEFAULT_CONFIG = { icon: Circle, label: 'Entwurf', className: 'status-badge-yellow' };
+
 export function StatusIndicator({ status, label, size = 'sm' }: StatusIndicatorProps) {
-  const config = STATUS_CONFIG[status];
+  const config = STATUS_CONFIG[status as string] ?? DEFAULT_CONFIG;
   const Icon = config.icon;
   const displayLabel = label || config.label;
 
