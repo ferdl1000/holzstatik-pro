@@ -10,7 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
-import { downsamplePdfIfLarge, renderPdfToTiles, extractPdfText } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles, extractOrOcrText } from '@/lib/upload/downsamplePdf';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -174,9 +174,17 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
       }
     } catch { /* fail-safe: Original verwenden */ }
 
-    // Text-Ebene clientseitig auslesen (deterministisch, KEIN KI-Aufruf nötig).
+    // Plan-Text clientseitig holen: Text-Ebene ODER OCR (Scan-Plan) — deterministisch,
+    // KEIN KI-Kontingent nötig. Bei OCR ein Hinweis (dauert ein paar Sekunden).
     let planText = '';
-    try { planText = await extractPdfText(file); } catch { /* Scan-Plan → KI übernimmt */ }
+    try {
+      const ocrToast = { dismissed: false };
+      const r = await extractOrOcrText(file, (p) => {
+        if (!ocrToast.dismissed && p < 100) { ocrToast.dismissed = true; toast({ title: 'Plan wird gelesen (OCR)…', description: 'Gescannter Plan ohne Text-Ebene — Texterkennung läuft im Browser.' }); }
+      });
+      planText = r.text;
+      if (r.method === 'ocr' && planText) toast({ title: 'Texterkennung abgeschlossen', description: 'Maße & Beschriftungen aus dem Scan gelesen.' });
+    } catch { /* KI übernimmt */ }
 
     const ts = Date.now();
     const path = `${user.id}/${projectId}/${ts}_${uploadName}`;

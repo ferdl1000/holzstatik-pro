@@ -132,6 +132,84 @@ export async function extractPdfText(file: File, maxPages = 4): Promise<string> 
   }
 }
 
+/**
+ * Clientseitiges OCR für gescannte/Bild-Pläne OHNE Text-Ebene (z.B. Lechner).
+ * Nutzt Tesseract.js (reine Browser-Bibliothek, KEIN API/Kontingent). Rendert die
+ * Seite(n) und erkennt deutschen Text → DN, Maße, ÜBERDACHUNG etc. werden auch bei
+ * Scan-Plänen kontingent-frei lesbar. Lazy geladen + fail-safe (''-Rückgabe).
+ */
+export async function ocrPdf(file: File, maxTiles = 8, onProgress?: (p: number) => void): Promise<string> {
+  try {
+    if (!file || file.type !== 'application/pdf') return '';
+    const pdfjsLib = await loadPdfjs();
+    const { createWorker } = await import('tesseract.js');
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const nPages = Math.min(pdf.numPages, 2);
+
+    // WICHTIG: OCR auf dem GANZEN Blatt liefert Müll (Text zu klein). Stattdessen
+    // das Blatt hochauflösend rendern (lange Kante ~5000 px) und in Kacheln OCR'n —
+    // dann ist der Text groß genug. So werden DN/Maße/ÜBERDACHUNG auch bei Scans lesbar.
+    const canvases: HTMLCanvasElement[] = [];
+    for (let p = 1; p <= nPages && canvases.length < maxTiles; p++) {
+      const page = await pdf.getPage(p);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(5000 / Math.max(base.width, base.height), 6);
+      const vp = page.getViewport({ scale });
+      const full = document.createElement('canvas');
+      full.width = Math.ceil(vp.width); full.height = Math.ceil(vp.height);
+      const fctx = full.getContext('2d');
+      if (!fctx) continue;
+      fctx.fillStyle = '#ffffff'; fctx.fillRect(0, 0, full.width, full.height);
+      await page.render({ canvasContext: fctx, viewport: vp }).promise;
+      const cols = Math.max(1, Math.round(full.width / 1700));
+      const rows = Math.max(1, Math.round(full.height / 1700));
+      const cw = Math.floor(full.width / cols), ch = Math.floor(full.height / rows);
+      for (let r = 0; r < rows && canvases.length < maxTiles; r++) {
+        for (let c = 0; c < cols && canvases.length < maxTiles; c++) {
+          const tile = document.createElement('canvas');
+          tile.width = cw; tile.height = ch;
+          const tctx = tile.getContext('2d');
+          if (!tctx) continue;
+          tctx.drawImage(full, c * cw, r * ch, cw, ch, 0, 0, cw, ch);
+          canvases.push(tile);
+        }
+      }
+    }
+    if (canvases.length === 0) return '';
+
+    const worker = await createWorker('deu');
+    const out: string[] = [];
+    for (let i = 0; i < canvases.length; i++) {
+      const { data: res } = await worker.recognize(canvases[i]);
+      if (res?.text?.trim()) out.push(res.text);
+      onProgress?.(Math.round((i + 1) / canvases.length * 100));
+    }
+    await worker.terminate();
+    return out.join('\n').trim();
+  } catch (err) {
+    console.warn('[ocrPdf] Fehler — übersprungen:', err);
+    return '';
+  }
+}
+
+/**
+ * Liefert den Plan-Text: erst die echte Text-Ebene (schnell, exakt); wenn die fehlt
+ * (Scan-Plan), clientseitiges OCR. So bekommen ALLE Plantypen kontingent-frei Text.
+ */
+export async function extractOrOcrText(file: File, onOcr?: (p: number) => void): Promise<{ text: string; method: 'textlayer' | 'ocr' | 'none' }> {
+  const layer = await extractPdfText(file);
+  if (layer && layer.replace(/\s/g, '').length > 60) return { text: layer, method: 'textlayer' };
+  const ocr = await ocrPdf(file, 8, onOcr);
+  // Qualitäts-Gate: OCR auf Plänen kann Müll liefern. Nur übernehmen, wenn der Text
+  // PLAN-typische Signale enthält (DN/Grad/Maße/Dach-Stichworte) — sonst lieber KI.
+  if (ocr && ocr.replace(/\s/g, '').length > 40) {
+    const hasSignal = /DN\s*\d|\d{1,2}\s*[°º]|\d{1,2}[,.]\d{2}\s*m|überdachung|vordach|dachneigung|trapezblech|ziegel|satteldach|pultdach|flachdach/i.test(ocr);
+    if (hasSignal) return { text: ocr, method: 'ocr' };
+  }
+  return { text: '', method: 'none' };
+}
+
 // ─── Kachel-Analyse (Teilabschnitte) ────────────────────────────────────────
 export interface PlanTile {
   blob: Blob;

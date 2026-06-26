@@ -9,7 +9,7 @@ import { Upload, ArrowRight, FileText, X, Loader2, Plus } from 'lucide-react';
 import { useProjects } from '@/hooks/useProjects';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
-import { downsamplePdfIfLarge, renderPdfToTiles, extractPdfText } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles, extractOrOcrText } from '@/lib/upload/downsamplePdf';
 import { useToast } from '@/hooks/use-toast';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -101,7 +101,7 @@ const NewProject = () => {
       } catch { /* Original verwenden */ }
 
       let planText = '';
-      try { planText = await extractPdfText(file); } catch { /* Scan-Plan */ }
+      try { planText = (await extractOrOcrText(file)).text; } catch { /* KI übernimmt */ }
 
       const ts = Date.now();
       const path = `${user.id}/${projectId}/${ts}_${upName}`;
