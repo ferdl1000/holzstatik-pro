@@ -7,13 +7,35 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { TreePine, Edit, Plus, Save, Trash2 } from 'lucide-react';
+import { TreePine, Edit, Plus, Save, Trash2, RefreshCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { recalcWithTimber, availableTimberOptions } from '@/lib/auto/recalcTimber';
 
 interface MaterialsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
 export function MaterialsTab({ project, onUpdate }: MaterialsTabProps) {
   const [editingMember, setEditingMember] = useState<TimberMember | null>(null);
+  const [grade, setGrade] = useState<string>('C24');
+  const timberOptions = availableTimberOptions();
+
+  function applyTimber() {
+    if (!onUpdate) return;
+    if (!project.members || project.members.length === 0) {
+      toast({ title: 'Keine Bauteile', description: 'Erst die Analyse/Berechnung ausführen.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const res = recalcWithTimber(project, grade);
+      onUpdate({ members: res.members });
+      toast({
+        title: `Neu berechnet mit ${grade}`,
+        description: `${res.green} grün · ${res.yellow} knapp · ${res.red} überlastet — Querschnitte neu dimensioniert.`,
+        variant: res.red > 0 ? 'destructive' : undefined,
+      });
+    } catch (e) {
+      toast({ title: 'Neuberechnung fehlgeschlagen', description: e instanceof Error ? e.message : String(e), variant: 'destructive' });
+    }
+  }
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [newMat, setNewMat] = useState<Partial<MaterialProfile>>({
     name: '', type: 'kvh', strengthClass: 'C24', density: 420,
@@ -49,6 +71,33 @@ export function MaterialsTab({ project, onUpdate }: MaterialsTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      {/* Holzart nachträglich ändern → automatische Neuberechnung */}
+      <SectionCard
+        title="Holzart ändern & neu berechnen"
+        subtitle="Wähle eine andere Festigkeitsklasse — alle Bauteile werden sofort neu dimensioniert (Querschnitt + Nachweis)."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Holzklasse für alle Bauteile</Label>
+            <Select value={grade} onValueChange={setGrade}>
+              <SelectTrigger className="w-72 h-9 text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {timberOptions.map((o) => (
+                  <SelectItem key={o.id} value={o.id} className="text-sm">{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button onClick={applyTimber} className="gap-1.5 h-9">
+            <RefreshCw className="h-3.5 w-3.5" />Anwenden & neu berechnen
+          </Button>
+          <p className="text-[11px] text-muted-foreground basis-full">
+            KVH/Schnittholz: C24, C30 · Brettschichtholz (Leimbinder): GL24h/c, GL28h/c. Die
+            Querschnitte werden so gewählt, dass die Ausnutzung ≤ 95 % bleibt.
+          </p>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Materialien" subtitle="Material-Agent – Holz- und Materialparameter">
         <div className="grid grid-cols-3 gap-4">
           {project.materials.map((mat) => (
