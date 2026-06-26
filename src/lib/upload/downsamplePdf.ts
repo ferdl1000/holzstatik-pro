@@ -201,11 +201,18 @@ export async function extractOrOcrText(file: File, onOcr?: (p: number) => void):
   const layer = await extractPdfText(file);
   if (layer && layer.replace(/\s/g, '').length > 60) return { text: layer, method: 'textlayer' };
   const ocr = await ocrPdf(file, 8, onOcr);
-  // Qualitäts-Gate: OCR auf Plänen kann Müll liefern. Nur übernehmen, wenn der Text
-  // PLAN-typische Signale enthält (DN/Grad/Maße/Dach-Stichworte) — sonst lieber KI.
+  // STRENGES Qualitäts-Gate: OCR auf dichten Plänen ist oft verrauscht (Zeichnungs-
+  // linien werden als Buchstaben gelesen). Nur übernehmen, wenn der DETERMINISTISCHE
+  // Parser echtes Signal findet (DN-Marker ODER mehrere klare Fakten) — sonst lieber
+  // gar nichts speichern und der KI-Vision überlassen (verlässlicher bei Scans).
   if (ocr && ocr.replace(/\s/g, '').length > 40) {
-    const hasSignal = /DN\s*\d|\d{1,2}\s*[°º]|\d{1,2}[,.]\d{2}\s*m|überdachung|vordach|dachneigung|trapezblech|ziegel|satteldach|pultdach|flachdach/i.test(ocr);
-    if (hasSignal) return { text: ocr, method: 'ocr' };
+    try {
+      const { parseAllFacts } = await import('../../../supabase/functions/_shared/textParser');
+      const f = parseAllFacts(ocr);
+      const strong = f.dnMarkers.length >= 1
+        || (f.dimensions.length + Number(f.ueberdachungCount) + f.aufbautenCodes.length >= 3 && f.coveringHints.length >= 1);
+      if (strong) return { text: ocr, method: 'ocr' };
+    } catch { /* Parser-Import fehlgeschlagen → OCR verwerfen */ }
   }
   return { text: '', method: 'none' };
 }
