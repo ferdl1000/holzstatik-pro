@@ -508,7 +508,33 @@ interface SceneProps {
   showDimensions: boolean;
 }
 
-function Scene({ roofParts, utilizations, selectedId, onSelect, showDimensions }: SceneProps) {
+/**
+ * Auto-Layout: wenn alle Dachteile auf derselben Position liegen (KI liefert oft
+ * positionX/Y = 0), würden sie sich im 3D überlappen. Dann ordnen wir sie als
+ * zusammenhängende Reihe entlang der Z-Achse an (Hauptdach mittig, Anbauten/Vordächer
+ * seitlich angesetzt) — so ist die GESAMTE Konstruktion sichtbar und nichts überdeckt.
+ */
+function layoutRoofParts(parts: RoofPart[]): RoofPart[] {
+  if (!parts || parts.length <= 1) return parts;
+  const first = parts[0];
+  const allSamePos = parts.every(
+    p => (p.positionX || 0) === (first.positionX || 0) && (p.positionY || 0) === (first.positionY || 0),
+  );
+  if (!allSamePos) return parts; // KI/Heuristik hat echte Positionen → respektieren
+
+  const sorted = [...parts].sort((a, b) => (a.kind === 'main' ? -1 : 0) - (b.kind === 'main' ? -1 : 0));
+  const out: RoofPart[] = [];
+  let edge = 0; // aktueller Rand entlang +Z
+  sorted.forEach((p, i) => {
+    const w = p.geometry.width || 8;
+    if (i === 0) { out.push({ ...p, positionX: 0, positionY: 0 }); edge = w / 2; }
+    else { out.push({ ...p, positionX: 0, positionY: edge + w / 2 }); edge += w; }
+  });
+  return out;
+}
+
+function Scene({ roofParts: rawParts, utilizations, selectedId, onSelect, showDimensions }: SceneProps) {
+  const roofParts = useMemo(() => layoutRoofParts(rawParts), [rawParts]);
   const boxes = useMemo(
     () => roofParts.flatMap(p => buildPartBoxes(p, p.positionX || 0, p.positionY || 0, utilizations)),
     [roofParts, utilizations],
@@ -639,9 +665,12 @@ function Sidebar({ roofParts, selectedId, utilizations }: {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-export function Roof3D({ roofParts, utilizations = {} }: Roof3DProps) {
+export function Roof3D({ roofParts: rawRoofParts, utilizations = {} }: Roof3DProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showDimensions, setShowDimensions] = useState(true);
+
+  // GESAMTE Konstruktion: Dachteile nicht-überlappend anordnen (siehe layoutRoofParts).
+  const roofParts = useMemo(() => layoutRoofParts(rawRoofParts), [rawRoofParts]);
 
   // Camera: compute bounding box across all parts for correct framing
   const allMinX = Math.min(...roofParts.map(p => (p.positionX || 0) - (p.geometry.length || 10) / 2));
