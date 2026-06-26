@@ -816,9 +816,6 @@ serve(async (req) => {
 
     await supabase.from('documents').update({ status: 'processing' }).eq('id', documentId);
 
-    const { data: fileData } = await supabase.storage.from('plan-documents').download(doc.file_path);
-    if (!fileData) throw new Error('Datei-Download fehlgeschlagen');
-
     function toBase64(buf: ArrayBuffer): string {
       const bytes = new Uint8Array(buf);
       let binary = '';
@@ -829,17 +826,13 @@ serve(async (req) => {
       return btoa(binary);
     }
 
-    const arrayBuffer = await fileData.arrayBuffer();
-    const base64 = toBase64(arrayBuffer);
-
-    // MIME-Typ aus dem Dokument: große Pläne werden client-seitig zu JPEG
-    // heruntergerechnet (downsamplePdf.ts) → Gemini Vision muss image/jpeg erhalten.
     const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
     const docMime = allowedMimes.includes(doc.file_type) ? doc.file_type : 'application/pdf';
 
-    // ── Kachel-Analyse: Teilabschnitte laden (volle Auflösung pro Region) ──
-    // Wenn der Client den Plan gekachelt hat, analysieren wir ALLE Kacheln in
-    // EINEM Gemini-Call (multi-image). So liest die KI auch kleinste Beschriftungen.
+    // ── Kachel-Analyse zuerst: Teilabschnitte laden (volle Auflösung pro Region) ──
+    // Wenn der Client den Plan gekachelt hat, analysieren wir ALLE Kacheln in EINEM
+    // Gemini-Call (multi-image). WICHTIG: dann wird die große Original-Datei NICHT
+    // mehr geladen/base64-kodiert (spart Memory → kein WORKER_RESOURCE_LIMIT bei 9 MB-Plänen).
     let tileImages: { base64: string; mimeType: string }[] = [];
     const tilePaths: string[] = Array.isArray(doc.tile_paths) ? doc.tile_paths : [];
     if (tilePaths.length >= 2) {
@@ -851,6 +844,14 @@ serve(async (req) => {
       }
     }
     const useTiles = tileImages.length >= 2;
+
+    // Original-Datei nur laden, wenn KEINE Kacheln genutzt werden (Memory sparen).
+    let base64 = '';
+    if (!useTiles) {
+      const { data: fileData } = await supabase.storage.from('plan-documents').download(doc.file_path);
+      if (!fileData) throw new Error('Datei-Download fehlgeschlagen');
+      base64 = toBase64(await fileData.arrayBuffer());
+    }
 
     let extracted: Record<string, unknown>;
     let analysisMethod: string;

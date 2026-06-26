@@ -252,11 +252,28 @@ export function AutoAnalysisTab({ project, onUpdate }: AutoAnalysisTabProps) {
   const status = result ? overallStatus(result) : null;
 
   const degraded = (project as any).extractionDegraded === true;
+  const analysisFailed = (project as any).analysisFailed === true;
+  const failReason = (project as any).analysisFailReason as string | undefined;
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
+      {/* ── KI-Analyse fehlgeschlagen (z.B. Kontingent) — keine Schein-Ergebnisse ── */}
+      {analysisFailed && (
+        <div className="rounded-md border-2 border-status-red/50 bg-status-red-bg p-4 flex items-start gap-3">
+          <XCircle className="h-5 w-5 text-status-red shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-status-red">KI-Analyse nicht abgeschlossen</p>
+            <p className="text-xs text-foreground/70 mt-1">
+              {failReason || 'Die KI-Analyse ist fehlgeschlagen.'} Die angezeigten Werte sind Platzhalter/Defaults —
+              bitte erneut analysieren (Knopf unten) oder im Admin den Hochgenau-Modus aktivieren. Es wurde NICHT
+              fälschlich „vollständig" gemeldet.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Degradierte-Extraktion-Banner (ehrliche Unsicherheit) ───── */}
-      {degraded && (
+      {degraded && !analysisFailed && (
         <div className="rounded-md border border-status-yellow/40 bg-status-yellow-bg p-4 flex items-start gap-3">
           <AlertTriangle className="h-5 w-5 text-status-yellow shrink-0 mt-0.5" />
           <div className="text-sm">

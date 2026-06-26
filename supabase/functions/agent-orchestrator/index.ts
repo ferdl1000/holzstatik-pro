@@ -218,9 +218,15 @@ serve(async (req) => {
       ...(learnedRulesPrompt ? { learnedRulesPrompt } : {}),
     });
     let extracted: Record<string, any>;
+    let extractionFailed = false;
+    let extractionFailReason = '';
     if (!docResult.ok) {
-      log.push(`✗ Dokument-Agent: ${docResult.error}`);
+      extractionFailed = true;
       const isQuota = docResult.error?.includes('429') || docResult.error?.includes('quota');
+      extractionFailReason = isQuota
+        ? 'KI-Tageslimit (Gemini-Kontingent) erreicht — bitte später erneut analysieren oder Hochgenau-Modus (eigenes Kontingent) nutzen.'
+        : `KI-Analyse fehlgeschlagen: ${docResult.error}`;
+      log.push(`✗ Dokument-Agent: ${docResult.error}`);
       // Statt zu sterben: leeren Extraktions-Datensatz erzeugen, damit User manuell weiterarbeiten kann
       extracted = { texts: [], dimensions: [], addresses: [], roofHints: null, structureHints: null,
         spans: [], overallConfidence: 0,
@@ -577,6 +583,7 @@ serve(async (req) => {
         return { ...rp, label: cleanRoofLabel(rp.label, rp.kind || 'main', isVordach ? vCounter : 1) };
       });
 
+
     // Geometrie-Fallback aus dimensions (für synthetische Dachteile)
     const dimsArr = (extracted.dimensions || []) as Array<{label?: string; value: number}>;
     const findDim = (l: string) => dimsArr.find(d => d.label?.toLowerCase().includes(l))?.value ?? 0;
@@ -689,6 +696,17 @@ serve(async (req) => {
       rp._pitchSource = pitchSource;
       // Form-Konsistenz
       if (finalPitch <= 5 && rp.form !== 'flachdach') rp.form = 'flachdach';
+
+      // Plausibilitäts-Kappung: Vordächer/Carports/Überdachungen sind praktisch immer
+      // flach bis leicht geneigt (≤15°). Wenn die Geometrie eine steile Neigung ergibt
+      // (oft aus synthetischer Vordach-Geometrie), ist das fast sicher falsch → kappen.
+      const isCanopy = rp.kind === 'vordach' || rp.kind === 'carport';
+      if (isCanopy && rp.pitch > 15) {
+        rp.pitch = Math.min(geomPitchPult > 0 && geomPitchPult <= 15 ? geomPitchPult : 5, 15);
+        rp.form = rp.pitch <= 5 ? 'flachdach' : 'pultdach';
+        rp._pitchSource = `Vordach flach gekappt (${rp.pitch}°, war steil)`;
+        if (!uncertainPitchParts.includes(rp.label)) uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
+      }
     });
     log.push(`✓ Geometrie-Schiedsrichter: Neigungen ${extractedRoofParts.map((r:any)=>r.pitch+'°').join(', ')} (DN-Marker: ${dnUniq.length?dnUniq.join('°,')+'°':'keine'})`);
     if (uncertainPitchParts.length > 0) {
@@ -700,17 +718,20 @@ serve(async (req) => {
     // DEDUP: doppelte Dachteile zusammenfassen (gleiche Form + ähnliche Neigung/Breite/Länge).
     // Die KI emittiert manchmal denselben Dachteil mehrfach (z.B. aus verschiedenen Ansichten).
     {
-      const seen = new Map<string, any>();
-      const sig = (rp: any) => {
-        const w = Math.round((rp.width ?? rp.geometry?.width ?? 0));
-        const l = Math.round((rp.length ?? rp.geometry?.length ?? 0));
-        const p = Math.round((rp.pitch ?? rp.geometry?.pitch ?? 0));
-        return `${rp.kind || 'main'}|${rp.form}|${p}|${w}|${l}`;
-      };
+      // Toleranz-Dedup: zwei Dachteile gleichen Typs mit FAST gleicher Grundfläche
+      // (Breite UND Länge je ≤ 1,2 m Unterschied) sind dasselbe Dach. Konservativ, damit
+      // echte separate Dächer (z.B. Vordach vs Hauptdach) NICHT fälschlich verschmelzen.
+      // Beim Duplikat bleibt das GRÖSSERE Teil (mehr Fläche = vollständigere Info).
+      const W = (rp: any) => rp.width ?? rp.geometry?.width ?? 0;
+      const L = (rp: any) => rp.length ?? rp.geometry?.length ?? 0;
       const deduped: any[] = [];
       for (const rp of extractedRoofParts) {
-        const key = sig(rp);
-        if (!seen.has(key)) { seen.set(key, rp); deduped.push(rp); }
+        const idx = deduped.findIndex((k) =>
+          (k.kind || 'main') === (rp.kind || 'main') &&
+          Math.abs(W(k) - W(rp)) <= 1.2 && Math.abs(L(k) - L(rp)) <= 1.2,
+        );
+        if (idx < 0) deduped.push(rp);
+        else if (W(rp) * L(rp) > W(deduped[idx]) * L(deduped[idx])) deduped[idx] = rp; // größeres behalten
       }
       // Genau EIN Hauptdach behalten (das mit der größten Fläche), Rest zu Anbau umkategorisieren.
       const mains = deduped.filter((r) => r.kind === 'main');
@@ -897,11 +918,21 @@ serve(async (req) => {
       const angenommen = report.filter(r => r.status === 'angenommen').length;
       const fehlend = report.filter(r => r.status === 'fehlt').map(r => r.feld);
       projectUpdate.analysisReport = report;
-      projectUpdate.analysisReportSummary = {
-        gelesen, angenommen, offen: fehlend.length, gesamt: report.length,
-        prozent: Math.round((gelesen + angenommen) / report.length * 100),
-      };
-      log.push(`✓ Lese-Report: ${gelesen} gelesen, ${angenommen} angenommen, ${fehlend.length} offen${fehlend.length ? ` (${fehlend.join(', ')})` : ' — vollständig'}`);
+      if (extractionFailed) {
+        // EHRLICHKEIT: keine vorgetäuschte Vollständigkeit, wenn die KI gar nicht lief.
+        projectUpdate.analysisFailed = true;
+        projectUpdate.analysisFailReason = extractionFailReason;
+        projectUpdate.analysisReportSummary = { gelesen: 0, angenommen, offen: report.length - angenommen, gesamt: report.length, prozent: 0, failed: true };
+        projectUpdate.unreliableAreas = [extractionFailReason, ...((projectUpdate.unreliableAreas as string[]) || [])];
+        log.push(`✗ Analyse fehlgeschlagen — Report NICHT als vollständig markiert (${extractionFailReason})`);
+      } else {
+        projectUpdate.analysisFailed = false;
+        projectUpdate.analysisReportSummary = {
+          gelesen, angenommen, offen: fehlend.length, gesamt: report.length,
+          prozent: Math.round((gelesen + angenommen) / report.length * 100),
+        };
+        log.push(`✓ Lese-Report: ${gelesen} gelesen, ${angenommen} angenommen, ${fehlend.length} offen${fehlend.length ? ` (${fehlend.join(', ')})` : ' — vollständig'}`);
+      }
     }
 
     // === Selbst-Lernen: Adressen + Planer persistieren (für nächsten Lauf + Korrektur-Capture) ===
