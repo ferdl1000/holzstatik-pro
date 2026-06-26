@@ -12,6 +12,7 @@ import {
   loadRulesForProject, derivePlanerKey, derivePlanerKeyFromText,
   buildRulesPromptBlock, applyLearnedRules, type LearnedRule,
 } from '../_shared/learning.ts';
+import { reconcileRoofParts } from '../_shared/roofParts.ts';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
@@ -542,207 +543,33 @@ serve(async (req) => {
     // Die deterministischen Fakten (parsedFacts) aus dem Text-Parser sind die
     // WAHRHEIT für: Anzahl Vordächer (ueberdachungCount), Dachneigungen (dnMarkers).
     // Die KI kann ein Dach "vergessen" — der Text-Parser nicht.
+    // ─── Dachteil-Rekonstruktion (deterministisch, unit-getestet: _shared/roofParts.ts) ───
+    // säubern → Hauptdach-/Vordach-Garantie → Geometrie-Schiedsrichter → Vordach-Kappung → Dedup.
     const facts = (extracted.parsedFacts as any) || {};
     const factUeberCount: number = facts.ueberdachungCount ?? 0;
-    const factUeberLabels: string[] = facts.ueberdachungLabels ?? [];
     const factDnMarkers: Array<{ value: number }> = facts.dnMarkers ?? [];
+    const dimsArr = (extracted.dimensions || []) as Array<{ label?: string; value: number }>;
+    const findDim = (l: string) => dimsArr.find((d) => d.label?.toLowerCase().includes(l))?.value ?? 0;
 
-    // Erkennt Text-Fragmente, die die KI fälschlich als Dachteil-Label ausgegeben hat
-    // (z.B. "ÜBERDACHUNG, STALL NEU, EINREICHPLAN." oder "Vordach Maße: 28.65m, 16.15").
-    function isGarbageLabel(raw: any): boolean {
-      const r = String(raw ?? '').trim();
-      if (!r || r === 'undefined') return true;
-      if (r.length > 38) return true;
-      if (/einreichplan|maße|massstab|maßstab|grundriss|ansicht\b/i.test(r)) return true;
-      if ((r.match(/,/g) || []).length >= 2) return true;          // mehrere Kommas = Textzeile
-      if ((r.match(/\d/g) || []).length >= 4) return true;          // viele Ziffern = Maßtext
-      if (/\d{2,}[.,]\d/.test(r)) return true;                      // enthält Maßzahl
-      return false;
-    }
-    // Saubere, menschenlesbare Bezeichnung erzeugen (nie ein Textfragment).
-    function cleanRoofLabel(raw: any, kind: string, vIdx: number): string {
-      if (!isGarbageLabel(raw)) return String(raw).trim();
-      if (kind === 'main') return 'Hauptdach';
-      if (kind === 'vordach' || kind === 'carport') return `Vordach ${vIdx}`;
-      if (kind === 'anbau' || kind === 'nebengebaeude') return `Anbau ${vIdx}`;
-      return `Dachteil ${vIdx}`;
-    }
-
-    let extractedRoofParts = (extracted.roofParts as Array<any> | undefined) ?? [];
-    // Nur Dachteile mit echter Geometrie behalten; Label säubern (Textfragmente raus).
-    let vCounter = 0;
-    extractedRoofParts = extractedRoofParts
-      .filter((rp: any) => {
-        const len = rp.length ?? rp.geometry?.length ?? 0;
-        const wid = rp.width ?? rp.geometry?.width ?? 0;
-        return len > 0 || wid > 0;          // muss reale Maße haben
-      })
-      .map((rp: any) => {
-        const isVordach = rp.kind === 'vordach' || rp.kind === 'carport';
-        if (isVordach) vCounter++;
-        return { ...rp, label: cleanRoofLabel(rp.label, rp.kind || 'main', isVordach ? vCounter : 1) };
-      });
-
-
-    // Geometrie-Fallback aus dimensions (für synthetische Dachteile)
-    const dimsArr = (extracted.dimensions || []) as Array<{label?: string; value: number}>;
-    const findDim = (l: string) => dimsArr.find(d => d.label?.toLowerCase().includes(l))?.value ?? 0;
-    const baseLen = findDim('länge') || findDim('gebäudelänge') || 10;
-    const baseWid = findDim('breite') || findDim('gebäudebreite') || 8;
-    const baseRidge = findDim('first') || 6;
-    const baseEaves = findDim('trauf') || 4;
-
-    // GARANTIE 1: Wenn KI gar keine roofParts lieferte → mindestens Hauptdach erzeugen
-    if (extractedRoofParts.length === 0) {
-      const mainPitch = factDnMarkers[0]?.value ?? 30;
-      extractedRoofParts = [{
-        id: 'main', kind: 'main', label: 'Hauptdach',
-        form: mainPitch <= 5 ? 'flachdach' : (mainPitch < 12 ? 'pultdach' : 'satteldach'),
-        positionX: 0, positionY: 0,
-        length: baseLen, width: baseWid, ridgeHeight: baseRidge, eavesHeight: baseEaves,
-        pitch: mainPitch, ridgeDirection: 'x', confidence: 0.5,
-        notes: 'Synthetisch erzeugt (KI lieferte kein Dachteil)',
-      }];
-      log.push('⚠ Multi-Roof-Garantie: Kein Dachteil von KI — Hauptdach synthetisch erzeugt');
-    }
-
-    // GARANTIE 2: Vordach-Anzahl ergänzen — KONSERVATIV. Der Text-Parser zählt
-    // Wort-Vorkommen (überzählt oft), darum wird auf max. 2 zusätzliche Vordächer
-    // begrenzt und nur ergänzt, wenn die KI deutlich zu wenige lieferte. Labels sind
-    // immer sauber generiert ("Vordach N"), NIE Textfragmente.
-    const kiVordachCount = extractedRoofParts.filter((rp: any) => rp.kind === 'vordach' || rp.kind === 'carport').length;
-    const targetVordach = Math.min(factUeberCount, 2);   // Über-Zählung kappen
-    if (targetVordach > kiVordachCount) {
-      const missing = targetVordach - kiVordachCount;
-      for (let i = 0; i < missing; i++) {
-        const n = kiVordachCount + i + 1;
-        const vPitch = 0; // Vordächer i.d.R. flach; Geometrie-Schiedsrichter korrigiert später
-        const side = i % 2 === 0 ? 1 : -1;
-        extractedRoofParts.push({
-          id: `vordach_${n}`, kind: 'vordach', label: `Vordach ${n}`,
-          form: 'flachdach', positionX: 0, positionY: side * (baseWid / 2 + 2),
-          length: baseLen, width: 3, ridgeHeight: baseEaves, eavesHeight: Math.max(2.5, baseEaves - 0.5),
-          pitch: vPitch, ridgeDirection: 'x', confidence: 0.5,
-          notes: 'Aus Plan-Hinweis ergänzt (bitte prüfen)',
-        });
-      }
-      log.push(`⚠ Multi-Roof-Garantie: ${missing} Vordach/Vordächer ergänzt (Text-Hinweis: ${factUeberCount})`);
-    }
-
-    // GARANTIE 3: GEOMETRIE-SCHIEDSRICHTER für Dachneigung.
-    // KI-DN-Werte werden NICHT blind übernommen (Gemini halluziniert manchmal).
-    // Stattdessen: deterministische Neigung aus First/Traufe/Breite berechnen,
-    // KI-DN nur akzeptieren wenn es zur Geometrie passt. Sonst Geometrie + unsicher.
-    const dnUniq = [...new Set(factDnMarkers.map(m => m.value))];
-    const uncertainPitchParts: string[] = [];
-    extractedRoofParts.forEach((rp: any, idx: number) => {
-      const len = rp.length ?? rp.geometry?.length ?? 0;
-      const wid = rp.width ?? rp.geometry?.width ?? 0;
-      const ridge = rp.ridgeHeight ?? rp.geometry?.ridgeHeight ?? 0;
-      const eaves = rp.eavesHeight ?? rp.geometry?.eavesHeight ?? 0;
-      const rise = ridge - eaves;
-
-      // Geometrie-Neigung berechnen (deterministisch)
-      let geomPitchPult = 0, geomPitchSattel = 0;
-      if (wid > 0 && rise > 0.05) {
-        geomPitchPult = Math.round(Math.atan2(rise, wid) * 180 / Math.PI * 10) / 10;        // über volle Breite
-        geomPitchSattel = Math.round(Math.atan2(rise, wid / 2) * 180 / Math.PI * 10) / 10;  // über halbe Breite
-      }
-
-      // KI-DN-Kandidat (eindeutig oder index-basiert)
-      const kiDn = dnUniq.length === 1
-        ? (rp.kind === 'main' ? dnUniq[0] : (factDnMarkers[idx]?.value ?? null))
-        : (factDnMarkers[idx]?.value ?? null);
-
-      let finalPitch: number;
-      let pitchSource: string;
-
-      if (rise <= 0.05 && wid > 0) {
-        // praktisch flach
-        finalPitch = 2; rp.form = 'flachdach'; pitchSource = 'flach (First≈Traufe)';
-      } else if (kiDn != null && (Math.abs(kiDn - geomPitchPult) <= 5 || Math.abs(kiDn - geomPitchSattel) <= 5)) {
-        // KI-DN passt zur Geometrie → vertrauenswürdig
-        finalPitch = kiDn; pitchSource = `DN-Marker ${kiDn}° (geometrie-bestätigt)`;
-        // Form aus dem besser passenden Geometrie-Modell
-        if (Math.abs(kiDn - geomPitchPult) <= Math.abs(kiDn - geomPitchSattel)) {
-          if (rp.form === 'satteldach') rp.form = 'pultdach';
-        }
-      } else if (geomPitchPult > 0) {
-        // KI-DN fehlt oder unplausibel → Geometrie nehmen (deterministisch).
-        // Mehrdeutigkeit: rise/width=0.20 kann 11° Pultdach ODER 22° Satteldach sein.
-        // Heuristik: flaches Dach (rise/width < 0.27, ≈ Pultdach <15° / Sattel <30°)
-        // → Pultdach (typisch für Ställe/Gewerbe/Vordächer). Steiler → Satteldach.
-        const flatness = rise / wid;
-        const kiSaysPult = rp.form === 'pultdach';
-        const kiSaysSattel = rp.form === 'satteldach' || rp.form === 'walmdach' || rp.form === 'krueppelwalmdach';
-        if (flatness < 0.27 && !kiSaysSattel) {
-          // flaches Dach → Pultdach (außer KI ist sich sehr sicher dass Satteldach)
-          finalPitch = geomPitchPult; rp.form = 'pultdach';
-          pitchSource = `Geometrie-Pultdach ${geomPitchPult}° (flach, rise/width=${flatness.toFixed(2)})`;
-        } else if (kiSaysPult) {
-          finalPitch = geomPitchPult; pitchSource = `Geometrie-Pultdach ${geomPitchPult}° (KI-Form)`;
-        } else {
-          finalPitch = geomPitchSattel; if (!rp.form || rp.form === 'flachdach') rp.form = 'satteldach';
-          pitchSource = `Geometrie-Satteldach ${geomPitchSattel}°`;
-        }
-        uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
-      } else {
-        finalPitch = kiDn ?? rp.pitch ?? 30;
-        pitchSource = kiDn != null ? `DN ${kiDn}° (ungeprüft)` : 'Default 30°';
-        uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
-      }
-
-      rp.pitch = finalPitch;
-      rp._pitchSource = pitchSource;
-      // Form-Konsistenz
-      if (finalPitch <= 5 && rp.form !== 'flachdach') rp.form = 'flachdach';
-
-      // Plausibilitäts-Kappung: Vordächer/Carports/Überdachungen sind praktisch immer
-      // flach bis leicht geneigt (≤15°). Wenn die Geometrie eine steile Neigung ergibt
-      // (oft aus synthetischer Vordach-Geometrie), ist das fast sicher falsch → kappen.
-      const isCanopy = rp.kind === 'vordach' || rp.kind === 'carport';
-      if (isCanopy && rp.pitch > 15) {
-        rp.pitch = Math.min(geomPitchPult > 0 && geomPitchPult <= 15 ? geomPitchPult : 5, 15);
-        rp.form = rp.pitch <= 5 ? 'flachdach' : 'pultdach';
-        rp._pitchSource = `Vordach flach gekappt (${rp.pitch}°, war steil)`;
-        if (!uncertainPitchParts.includes(rp.label)) uncertainPitchParts.push(rp.label || `Dachteil ${idx + 1}`);
-      }
+    const recon = reconcileRoofParts({
+      kiParts: (extracted.roofParts as any[]) ?? [],
+      dnMarkers: factDnMarkers.map((m) => m.value),
+      ueberdachungCount: factUeberCount,
+      base: {
+        length: findDim('länge') || findDim('gebäudelänge') || 10,
+        width: findDim('breite') || findDim('gebäudebreite') || 8,
+        ridgeHeight: findDim('first') || 6,
+        eavesHeight: findDim('trauf') || 4,
+      },
     });
-    log.push(`✓ Geometrie-Schiedsrichter: Neigungen ${extractedRoofParts.map((r:any)=>r.pitch+'°').join(', ')} (DN-Marker: ${dnUniq.length?dnUniq.join('°,')+'°':'keine'})`);
-    if (uncertainPitchParts.length > 0) {
-      const w = `Dachneigung aus Geometrie berechnet (kein verlässlicher DN-Marker gelesen): ${uncertainPitchParts.join(', ')} — bitte gegen Plan prüfen`;
+    let extractedRoofParts: any[] = recon.parts;
+    recon.log.forEach((l) => log.push(`✓ Dachteile: ${l}`));
+    const dnUniqVals = [...new Set(factDnMarkers.map((m) => m.value))];
+    log.push(`✓ Geometrie-Schiedsrichter: Neigungen ${extractedRoofParts.map((r: any) => r.pitch + '°').join(', ')} (DN-Marker: ${dnUniqVals.length ? dnUniqVals.join('°,') + '°' : 'keine'})`);
+    if (recon.uncertain.length > 0) {
+      const w = `Dachneigung aus Geometrie berechnet (kein verlässlicher DN-Marker): ${[...new Set(recon.uncertain)].join(', ')} — bitte gegen Plan prüfen`;
       extracted.unreliableAreas = [...(extracted.unreliableAreas as string[] || []), w];
       log.push(`⚠ ${w}`);
-    }
-
-    // DEDUP: doppelte Dachteile zusammenfassen (gleiche Form + ähnliche Neigung/Breite/Länge).
-    // Die KI emittiert manchmal denselben Dachteil mehrfach (z.B. aus verschiedenen Ansichten).
-    {
-      // Toleranz-Dedup: zwei Dachteile gleichen Typs mit FAST gleicher Grundfläche
-      // (Breite UND Länge je ≤ 1,2 m Unterschied) sind dasselbe Dach. Konservativ, damit
-      // echte separate Dächer (z.B. Vordach vs Hauptdach) NICHT fälschlich verschmelzen.
-      // Beim Duplikat bleibt das GRÖSSERE Teil (mehr Fläche = vollständigere Info).
-      const W = (rp: any) => rp.width ?? rp.geometry?.width ?? 0;
-      const L = (rp: any) => rp.length ?? rp.geometry?.length ?? 0;
-      const deduped: any[] = [];
-      for (const rp of extractedRoofParts) {
-        const idx = deduped.findIndex((k) =>
-          (k.kind || 'main') === (rp.kind || 'main') &&
-          Math.abs(W(k) - W(rp)) <= 1.2 && Math.abs(L(k) - L(rp)) <= 1.2,
-        );
-        if (idx < 0) deduped.push(rp);
-        else if (W(rp) * L(rp) > W(deduped[idx]) * L(deduped[idx])) deduped[idx] = rp; // größeres behalten
-      }
-      // Genau EIN Hauptdach behalten (das mit der größten Fläche), Rest zu Anbau umkategorisieren.
-      const mains = deduped.filter((r) => r.kind === 'main');
-      if (mains.length > 1) {
-        mains.sort((a, b) => ((b.width ?? 0) * (b.length ?? 0)) - ((a.width ?? 0) * (a.length ?? 0)));
-        mains.slice(1).forEach((r, i) => { r.kind = 'anbau'; if (isGarbageLabel(r.label) || /^Hauptdach/.test(r.label)) r.label = `Anbau ${i + 1}`; });
-      }
-      if (deduped.length !== extractedRoofParts.length) {
-        log.push(`✓ Dachteile dedupliziert: ${extractedRoofParts.length} → ${deduped.length}`);
-      }
-      extractedRoofParts = deduped;
     }
 
     // roofParts in projectUpdate schreiben
@@ -769,11 +596,10 @@ serve(async (req) => {
       const partSummary = projectUpdate.roofParts.map((r: any) => `${r.label} (${r.form} ${r.geometry.pitch}°)`).join(', ');
       log.push(`✓ RoofParts FINAL: ${projectUpdate.roofParts.length} Dachteil(e) — ${partSummary}`);
 
-      // Validierung: Anzahl plausibel?
-      const expectedMin = 1 + factUeberCount;
+      // Validierung: Anzahl plausibel? (Vordächer in der Rekonstruktion auf max 2 gekappt)
+      const expectedMin = 1 + Math.min(factUeberCount, 2);
       if (projectUpdate.roofParts.length < expectedMin) {
-        const warn = `Dachteil-Anzahl ${projectUpdate.roofParts.length} < erwartet ${expectedMin} (1 Haupt + ${factUeberCount} Vordächer)`;
-        errors.push(warn);
+        const warn = `Dachteil-Anzahl ${projectUpdate.roofParts.length} < erwartet ${expectedMin}`;
         log.push(`⚠ ${warn}`);
       }
     } else {
