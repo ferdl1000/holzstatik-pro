@@ -929,7 +929,10 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
         const textsContent = Array.isArray(extracted.texts)
           ? (extracted.texts as Array<{content?: string}>).map(t => t.content || '').join('\n')
           : '';
-        const combinedText = `${rawText}\n${textsContent}`;
+        // Client-Text-Ebene (deterministisch ausgelesen) zuerst — die ist verlässlicher
+        // als die KI-Transkription. So sind DN/Maße/Codes kontingent-frei und stabil.
+        const clientText = typeof doc.plan_text === 'string' ? doc.plan_text : '';
+        const combinedText = `${clientText}\n${rawText}\n${textsContent}`;
         const facts = parseAllFacts(combinedText);
 
         // Zusätzlich: KI-geliefertes _dachneigungen-Array als DN-Quelle nutzen,
@@ -947,7 +950,27 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
       } catch (combinedErr) {
         const errMsg = combinedErr instanceof Error ? combinedErr.message : String(combinedErr);
         const isQuotaError = errMsg.includes('429') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exhausted');
-        if (isQuotaError) {
+
+        // ── KONTINGENT-FREIER NOTFALL: Text-Ebene des Plans deterministisch parsen ──
+        // Wenn die KI ausfällt (Quota) der Plan aber eine echte Text-Ebene hat, liefern
+        // wir trotzdem ein Ergebnis aus dem deterministischen Parser — OHNE Gemini.
+        const clientText = typeof doc.plan_text === 'string' ? doc.plan_text : '';
+        if (isQuotaError && clientText.length > 80) {
+          const facts = parseAllFacts(clientText);
+          const factSignal = facts.dnMarkers.length + facts.dimensions.length + facts.ueberdachungCount + facts.aufbautenCodes.length;
+          if (factSignal >= 2) {
+            console.warn('Quota — deterministischer Text-Parser übernimmt (kein Gemini).');
+            extracted = { texts: [], dimensions: facts.dimensions.map(d => ({ label: d.label, value: d.value, confidence: 0.8 })),
+              addresses: [], roofParts: [], _rawText: clientText, overallConfidence: 0.6,
+              _analysisMethod: 'deterministic-text-only', parsedFacts: facts,
+              unreliableAreas: ['KI nicht verfügbar (Kontingent) — Werte aus Plan-Text gelesen, bitte Dachformen/Position prüfen.'] };
+            analysisMethod = 'deterministic-text-only';
+            applyHardFacts(extracted, facts);
+            // weiter unten kein Gemini mehr — direkt mit diesen Fakten arbeiten
+          } else {
+            throw combinedErr; // zu wenig Text-Signal → ehrlich scheitern
+          }
+        } else if (isQuotaError) {
           // Quota: einfacher Single-Call ohne _rawText, mit DN-Marker-Post-Processing
           console.warn('Combined-Call Quota-Fehler, Minimal-Fallback:', errMsg);
           const text = await geminiVision({

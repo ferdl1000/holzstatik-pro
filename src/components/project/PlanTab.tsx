@@ -10,7 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
-import { downsamplePdfIfLarge, renderPdfToTiles } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles, extractPdfText } from '@/lib/upload/downsamplePdf';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -174,6 +174,10 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
       }
     } catch { /* fail-safe: Original verwenden */ }
 
+    // Text-Ebene clientseitig auslesen (deterministisch, KEIN KI-Aufruf nötig).
+    let planText = '';
+    try { planText = await extractPdfText(file); } catch { /* Scan-Plan → KI übernimmt */ }
+
     const ts = Date.now();
     const path = `${user.id}/${projectId}/${ts}_${uploadName}`;
     const { error } = await supabase.storage.from('plan-documents').upload(path, uploadBlob, { upsert: true, contentType: uploadType });
@@ -210,6 +214,7 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
       file_size: uploadBlob.size,
       status: 'uploaded',
       ...(tilePaths ? { tile_paths: tilePaths } : {}),
+      ...(planText.length > 40 ? { plan_text: planText.slice(0, 60000) } : {}),
     }).select('id').single();
 
     toast({ title: `"${uploadName}" hochgeladen`, description: docData?.id ? 'Bereit für die KI-Analyse.' : '' });

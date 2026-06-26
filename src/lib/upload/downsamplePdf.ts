@@ -105,6 +105,33 @@ export async function downsamplePdfIfLarge(file: File): Promise<DownsampleResult
   }
 }
 
+/**
+ * Liest die TEXT-EBENE eines PDFs clientseitig aus (pdf.js getTextContent).
+ * Viele Einreichpläne haben echten, selektierbaren Text — dann brauchen wir die KI
+ * für DN/Maße/Codes/Adressen GAR NICHT (deterministisch + kontingent-frei).
+ * Liefert '' bei reinen Bild-/Scan-Plänen (dann übernimmt die KI-Vision).
+ */
+export async function extractPdfText(file: File, maxPages = 4): Promise<string> {
+  try {
+    if (!file || file.type !== 'application/pdf') return '';
+    const pdfjsLib = await loadPdfjs();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const n = Math.min(pdf.numPages, maxPages);
+    const parts: string[] = [];
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const txt = (content.items as Array<{ str?: string }>).map((it) => it.str || '').join(' ');
+      if (txt.trim()) parts.push(txt);
+    }
+    return parts.join('\n').replace(/\s{3,}/g, '  ').trim();
+  } catch (err) {
+    console.warn('[extractPdfText] Fehler — KI-Vision übernimmt:', err);
+    return '';
+  }
+}
+
 // ─── Kachel-Analyse (Teilabschnitte) ────────────────────────────────────────
 export interface PlanTile {
   blob: Blob;

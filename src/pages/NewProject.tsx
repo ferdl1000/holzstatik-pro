@@ -9,7 +9,7 @@ import { Upload, ArrowRight, FileText, X, Loader2, Plus } from 'lucide-react';
 import { useProjects } from '@/hooks/useProjects';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
-import { downsamplePdfIfLarge, renderPdfToTiles } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles, extractPdfText } from '@/lib/upload/downsamplePdf';
 import { useToast } from '@/hooks/use-toast';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -100,6 +100,9 @@ const NewProject = () => {
         if (reduced) { upBlob = reduced.blob; upName = reduced.fileName; upType = reduced.mimeType; }
       } catch { /* Original verwenden */ }
 
+      let planText = '';
+      try { planText = await extractPdfText(file); } catch { /* Scan-Plan */ }
+
       const ts = Date.now();
       const path = `${user.id}/${projectId}/${ts}_${upName}`;
       const { error: uploadError } = await supabase.storage
@@ -139,6 +142,7 @@ const NewProject = () => {
         file_size: upBlob.size,
         status: 'uploaded',
         ...(tilePaths ? { tile_paths: tilePaths } : {}),
+        ...(planText.length > 40 ? { plan_text: planText.slice(0, 60000) } : {}),
       });
 
       if (dbError) {
