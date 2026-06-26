@@ -19,6 +19,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { geminiVision, parseJsonResponse, CORS_HEADERS } from '../_shared/gemini.ts';
+import { openRouterVision, openRouterAvailable } from '../_shared/openrouter.ts';
 import { parseAllFacts, ParsedFacts } from '../_shared/textParser.ts';
 
 // ============================================================
@@ -813,10 +814,13 @@ serve(async (req) => {
     // (deutlich stabilere Erkennung). Sonst kostenloser Shared-Key + Flash.
     let userApiKey: string | undefined;
     let userKeyPresent = false;
+    let openRouterKey: string | undefined;
     try {
-      const { data: ks } = await supabase.from('system_settings').select('key,value').in('key', ['GOOGLE_AI_API_KEY', 'GEMINI_API_KEY']);
-      const found = (ks || []).find((r: any) => typeof r.value === 'string' && r.value.trim().length > 20);
+      const { data: ks } = await supabase.from('system_settings').select('key,value').in('key', ['GOOGLE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY']);
+      const found = (ks || []).find((r: any) => ['GOOGLE_AI_API_KEY', 'GEMINI_API_KEY'].includes(r.key) && typeof r.value === 'string' && r.value.trim().length > 20);
       if (found) { userApiKey = found.value.trim(); userKeyPresent = true; }
+      const orFound = (ks || []).find((r: any) => r.key === 'OPENROUTER_API_KEY' && typeof r.value === 'string' && r.value.trim().length > 20);
+      if (orFound) openRouterKey = orFound.value.trim();
     } catch { /* kein Key in DB → Env-Key */ }
 
     // Pro-Modell wenn: explizit Hochgenau ODER eigener (bezahlter) Key vorhanden und
@@ -903,9 +907,36 @@ Plans in hoher Auflösung. Lies in JEDER Kachel ALLE Beschriftungen, Maße und S
 Führe die Informationen zu EINEM Gesamtergebnis zusammen. Da die Kacheln überlappen,
 zähle gleiche Werte/Bauteile NICHT doppelt. Übersieh nichts — gerade kleine Maß- und
 DN-Zahlen sind jetzt gut lesbar.` : '';
-        const text = await geminiVision({
+        // Bildquellen für ein stärkeres freies Modell (OpenRouter/Qwen2.5-VL):
+        // Kacheln, oder das heruntergerechnete JPEG. PDF-Direktinput kann OpenRouter nicht.
+        const orImages = useTiles ? tileImages : (docMime.startsWith('image/') ? [{ base64, mimeType: docMime }] : null);
+        const orUserPrompt = `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}${useTiles ? ' (in Teilabschnitten geliefert)' : ''}. Liefere das vollständige JSON inkl. _rawText.`;
+
+        let text: string;
+        let reader = 'gemini';
+        // Wenn ein OpenRouter-Key gesetzt ist UND Bilder vorliegen: stärkeres freies
+        // Modell zuerst (besseres Plan-Verständnis), Gemini als Fallback.
+        if (orImages && (openRouterKey || openRouterAvailable())) {
+          try {
+            text = await openRouterVision({
+              systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
+              images: orImages, maxTokens: useTiles ? 32000 : 24000, jsonMode: true,
+              apiKey: openRouterKey,
+            });
+            reader = 'openrouter';
+          } catch (_orErr) {
+            text = await geminiVision({
+              systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
+              ...(useTiles ? { images: tileImages } : { fileBase64: base64, mimeType: docMime }),
+              jsonMode: true, maxTokens: useTiles ? 32000 : 24000,
+              mediaResolution: (useTiles || primaryVisionModel === 'gemini-2.5-pro') ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
+              model: primaryVisionModel, apiKey: userApiKey,
+            });
+          }
+        } else {
+          text = await geminiVision({
           systemPrompt: combinedPrompt + tilePrompt,
-          userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}${useTiles ? ' (in Teilabschnitten geliefert)' : ''}. Liefere das vollständige JSON inkl. _rawText.`,
+          userPrompt: orUserPrompt,
           ...(useTiles ? { images: tileImages } : { fileBase64: base64, mimeType: docMime }),
           jsonMode: true,
           // Bei Kacheln darf der _rawText länger sein (mehr Detail) → 32k. Sonst 24k
@@ -917,9 +948,11 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
           model: primaryVisionModel,
           apiKey: userApiKey,
         });
+        }
         extracted = parseJsonResponse<Record<string, unknown>>(text);
-        analysisMethod = `${useTiles ? `tiled-${tileImages.length}-` : 'single-'}combined-${primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash'}`;
+        analysisMethod = `${useTiles ? `tiled-${tileImages.length}-` : 'single-'}combined-${reader === 'openrouter' ? 'openrouter' : (primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash')}`;
         extracted._analysisMethod = analysisMethod;
+        extracted._reader = reader;
         extracted._tileCount = useTiles ? tileImages.length : 0;
 
         // Deterministischer Parser auf MEHRERE Textquellen:
