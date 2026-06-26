@@ -104,3 +104,87 @@ export async function downsamplePdfIfLarge(file: File): Promise<DownsampleResult
     return null;
   }
 }
+
+// ─── Kachel-Analyse (Teilabschnitte) ────────────────────────────────────────
+export interface PlanTile {
+  blob: Blob;
+  fileName: string;
+  mimeType: 'image/jpeg';
+  /** Position der Kachel im Plan (für Merge/Debug). */
+  page: number; col: number; row: number;
+}
+
+/** Auflösung, auf die jede Planseite VOR dem Kacheln hochskaliert wird. */
+const TILE_RENDER_EDGE_PX = 3400;
+/** Ziel-Kachelkantenlänge (px) — klein genug für schnelle, detailreiche KI-Lesung. */
+const TILE_TARGET_PX = 1700;
+/** Überlappung zwischen Kacheln, damit nichts an der Grenze zerschnitten wird. */
+const TILE_OVERLAP = 0.08;
+
+/**
+ * Rendert einen Plan in überlappende Kacheln in voller Auflösung. Jede Kachel ist
+ * klein genug, dass die KI auch winzige Beschriftungen (DN, Maße, Codes) sicher liest;
+ * zusammen decken sie den GANZEN Plan ab. Fail-safe: null bei Fehler/zu klein.
+ *
+ * @param maxTiles Sicherheitskappe für die Gesamtzahl Kacheln (Memory/Call-Größe).
+ */
+export async function renderPdfToTiles(file: File, maxTiles = 6): Promise<PlanTile[] | null> {
+  try {
+    if (!file || file.type !== 'application/pdf') return null;
+    const pdfjsLib = await loadPdfjs();
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const nPages = Math.min(pdf.numPages, 3);
+    const tiles: PlanTile[] = [];
+
+    for (let p = 1; p <= nPages && tiles.length < maxTiles; p++) {
+      const page = await pdf.getPage(p);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(TILE_RENDER_EDGE_PX / Math.max(base.width, base.height), 4);
+      const vp = page.getViewport({ scale });
+      const full = document.createElement('canvas');
+      full.width = Math.ceil(vp.width);
+      full.height = Math.ceil(vp.height);
+      const fctx = full.getContext('2d');
+      if (!fctx) return null;
+      fctx.fillStyle = '#ffffff';
+      fctx.fillRect(0, 0, full.width, full.height);
+      await page.render({ canvasContext: fctx, viewport: vp }).promise;
+
+      // Rasterung bestimmen: so viele Spalten/Zeilen, dass Kacheln ~TILE_TARGET_PX groß sind.
+      const cols = Math.max(1, Math.round(full.width / TILE_TARGET_PX));
+      const rows = Math.max(1, Math.round(full.height / TILE_TARGET_PX));
+      const cellW = full.width / cols;
+      const cellH = full.height / rows;
+      const ovX = cellW * TILE_OVERLAP;
+      const ovY = cellH * TILE_OVERLAP;
+
+      for (let r = 0; r < rows && tiles.length < maxTiles; r++) {
+        for (let c = 0; c < cols && tiles.length < maxTiles; c++) {
+          const sx = Math.max(0, c * cellW - ovX);
+          const sy = Math.max(0, r * cellH - ovY);
+          const sw = Math.min(full.width - sx, cellW + 2 * ovX);
+          const sh = Math.min(full.height - sy, cellH + 2 * ovY);
+          const tile = document.createElement('canvas');
+          tile.width = Math.ceil(sw);
+          tile.height = Math.ceil(sh);
+          const tctx = tile.getContext('2d');
+          if (!tctx) continue;
+          tctx.fillStyle = '#ffffff';
+          tctx.fillRect(0, 0, tile.width, tile.height);
+          tctx.drawImage(full, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
+          const blob = await new Promise<Blob | null>((res) => tile.toBlob((b) => res(b), 'image/jpeg', 0.85));
+          if (blob) {
+            const baseName = file.name.replace(/\.pdf$/i, '');
+            tiles.push({ blob, fileName: `${baseName}_p${p}_r${r}c${c}.jpg`, mimeType: 'image/jpeg', page: p, col: c, row: r });
+          }
+        }
+      }
+    }
+    // Nur kacheln, wenn es wirklich mehrere Abschnitte gibt (sonst lohnt es nicht).
+    return tiles.length >= 2 ? tiles : null;
+  } catch (err) {
+    console.warn('[renderPdfToTiles] Fehler — Kachelung übersprungen:', err);
+    return null;
+  }
+}

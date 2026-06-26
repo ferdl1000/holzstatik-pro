@@ -18,9 +18,11 @@ export interface GeminiTextRequest {
 }
 
 export interface GeminiVisionRequest extends GeminiTextRequest {
-  /** PDF/Image als Base64 */
-  fileBase64: string;
-  mimeType: string;
+  /** PDF/Image als Base64 (Einzelbild). Bei `images` ignoriert. */
+  fileBase64?: string;
+  mimeType?: string;
+  /** Mehrere Bilder (Kacheln) in EINEM Call — für Teilabschnitt-Analyse großer Pläne. */
+  images?: { base64: string; mimeType: string }[];
 }
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -86,11 +88,16 @@ export async function geminiVision(req: GeminiVisionRequest): Promise<string> {
   // gemini-2.5-pro (Hochgenau) fällt automatisch auf Flash zurück, falls Quota erschöpft.
   const modelCandidates = buildCascade(req.model);
 
+  // Bild-Parts: entweder mehrere Kacheln (images[]) oder ein Einzelbild (fileBase64).
+  const imageParts = (req.images && req.images.length > 0)
+    ? req.images.map((img) => ({ inline_data: { mime_type: img.mimeType, data: img.base64 } }))
+    : (req.fileBase64 ? [{ inline_data: { mime_type: req.mimeType ?? 'application/pdf', data: req.fileBase64 } }] : []);
+
   const body = {
     contents: [{
       parts: [
         { text: req.userPrompt },
-        { inline_data: { mime_type: req.mimeType, data: req.fileBase64 } },
+        ...imageParts,
       ],
     }],
     systemInstruction: { parts: [{ text: req.systemPrompt }] },

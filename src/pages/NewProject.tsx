@@ -9,7 +9,7 @@ import { Upload, ArrowRight, FileText, X, Loader2, Plus } from 'lucide-react';
 import { useProjects } from '@/hooks/useProjects';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
-import { downsamplePdfIfLarge } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles } from '@/lib/upload/downsamplePdf';
 import { useToast } from '@/hooks/use-toast';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -100,7 +100,8 @@ const NewProject = () => {
         if (reduced) { upBlob = reduced.blob; upName = reduced.fileName; upType = reduced.mimeType; }
       } catch { /* Original verwenden */ }
 
-      const path = `${user.id}/${projectId}/${upName}`;
+      const ts = Date.now();
+      const path = `${user.id}/${projectId}/${ts}_${upName}`;
       const { error: uploadError } = await supabase.storage
         .from('plan-documents')
         .upload(path, upBlob, { upsert: true, contentType: upType });
@@ -114,6 +115,21 @@ const NewProject = () => {
         continue;
       }
 
+      // Kachel-Analyse: Plan in hochauflösende Teilabschnitte zerlegen + hochladen.
+      let tilePaths: string[] | null = null;
+      try {
+        const tiles = await renderPdfToTiles(file);
+        if (tiles && tiles.length >= 2) {
+          const paths: string[] = [];
+          for (const t of tiles) {
+            const tp = `${user.id}/${projectId}/${ts}_${t.fileName}`;
+            const up = await supabase.storage.from('plan-documents').upload(tp, t.blob, { upsert: true, contentType: 'image/jpeg' });
+            if (!up.error) paths.push(tp);
+          }
+          if (paths.length >= 2) tilePaths = paths;
+        }
+      } catch { /* fail-safe */ }
+
       const { error: dbError } = await supabase.from('documents').insert({
         project_id: projectId,
         user_id: user!.id,
@@ -122,6 +138,7 @@ const NewProject = () => {
         file_type: upType,
         file_size: upBlob.size,
         status: 'uploaded',
+        ...(tilePaths ? { tile_paths: tilePaths } : {}),
       });
 
       if (dbError) {

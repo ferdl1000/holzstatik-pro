@@ -10,7 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { getAnalysisQuality } from '@/lib/settings/analysisQuality';
-import { downsamplePdfIfLarge } from '@/lib/upload/downsamplePdf';
+import { downsamplePdfIfLarge, renderPdfToTiles } from '@/lib/upload/downsamplePdf';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -174,12 +174,33 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
       }
     } catch { /* fail-safe: Original verwenden */ }
 
-    const path = `${user.id}/${projectId}/${Date.now()}_${uploadName}`;
+    const ts = Date.now();
+    const path = `${user.id}/${projectId}/${ts}_${uploadName}`;
     const { error } = await supabase.storage.from('plan-documents').upload(path, uploadBlob, { upsert: true, contentType: uploadType });
     if (error) {
       toast({ title: `Upload fehlgeschlagen: ${file.name}`, description: error.message, variant: 'destructive' });
       return;
     }
+
+    // Kachel-Analyse: Plan zusätzlich in hochauflösende Teilabschnitte zerlegen und
+    // hochladen. Die KI liest jede Kachel im Detail → nichts wird übersehen. Fail-safe.
+    let tilePaths: string[] | null = null;
+    try {
+      const tiles = await renderPdfToTiles(file);
+      if (tiles && tiles.length >= 2) {
+        const paths: string[] = [];
+        for (let i = 0; i < tiles.length; i++) {
+          const tp = `${user.id}/${projectId}/${ts}_${tiles[i].fileName}`;
+          const up = await supabase.storage.from('plan-documents').upload(tp, tiles[i].blob, { upsert: true, contentType: 'image/jpeg' });
+          if (!up.error) paths.push(tp);
+        }
+        if (paths.length >= 2) {
+          tilePaths = paths;
+          toast({ title: `Detail-Analyse vorbereitet`, description: `Plan in ${paths.length} hochauflösende Teilabschnitte zerlegt.` });
+        }
+      }
+    } catch { /* fail-safe: ohne Kacheln weiter */ }
+
     const { data: docData } = await supabase.from('documents').insert({
       project_id: projectId,
       user_id: user.id,
@@ -188,6 +209,7 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
       file_type: uploadType,
       file_size: uploadBlob.size,
       status: 'uploaded',
+      ...(tilePaths ? { tile_paths: tilePaths } : {}),
     }).select('id').single();
 
     toast({ title: `"${uploadName}" hochgeladen`, description: docData?.id ? 'Bereit für die KI-Analyse.' : '' });

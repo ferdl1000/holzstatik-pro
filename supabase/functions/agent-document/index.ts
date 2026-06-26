@@ -819,20 +819,38 @@ serve(async (req) => {
     const { data: fileData } = await supabase.storage.from('plan-documents').download(doc.file_path);
     if (!fileData) throw new Error('Datei-Download fehlgeschlagen');
 
-    const arrayBuffer = await fileData.arrayBuffer();
-    // Chunk-encode to avoid stack overflow on large files
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = '';
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+    function toBase64(buf: ArrayBuffer): string {
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+      }
+      return btoa(binary);
     }
-    const base64 = btoa(binary);
+
+    const arrayBuffer = await fileData.arrayBuffer();
+    const base64 = toBase64(arrayBuffer);
 
     // MIME-Typ aus dem Dokument: große Pläne werden client-seitig zu JPEG
     // heruntergerechnet (downsamplePdf.ts) → Gemini Vision muss image/jpeg erhalten.
     const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
     const docMime = allowedMimes.includes(doc.file_type) ? doc.file_type : 'application/pdf';
+
+    // ── Kachel-Analyse: Teilabschnitte laden (volle Auflösung pro Region) ──
+    // Wenn der Client den Plan gekachelt hat, analysieren wir ALLE Kacheln in
+    // EINEM Gemini-Call (multi-image). So liest die KI auch kleinste Beschriftungen.
+    let tileImages: { base64: string; mimeType: string }[] = [];
+    const tilePaths: string[] = Array.isArray(doc.tile_paths) ? doc.tile_paths : [];
+    if (tilePaths.length >= 2) {
+      for (const tp of tilePaths.slice(0, 6)) {
+        try {
+          const { data: tData } = await supabase.storage.from('plan-documents').download(tp);
+          if (tData) tileImages.push({ base64: toBase64(await tData.arrayBuffer()), mimeType: 'image/jpeg' });
+        } catch { /* einzelne Kachel überspringen */ }
+      }
+    }
+    const useTiles = tileImages.length >= 2;
 
     let extracted: Record<string, unknown>;
     let analysisMethod: string;
@@ -862,23 +880,31 @@ Füge dem JSON zwei zusätzliche Felder hinzu:
    Beispiel: wenn du "DN 10°" 5× im Plan siehst → "_dachneigungen": [10]
    Wenn Hauptdach 10° und Vordach 5° → "_dachneigungen": [10, 5]
    Diese Werte sind WICHTIGER als alles andere — finde sie unbedingt!${rulesBlock}`;
+        const tilePrompt = useTiles ? `
+
+=== TEILABSCHNITTE (KACHELN) ===
+Die folgenden ${tileImages.length} Bilder sind ÜBERLAPPENDE Ausschnitte EIN UND DESSELBEN
+Plans in hoher Auflösung. Lies in JEDER Kachel ALLE Beschriftungen, Maße und Symbole.
+Führe die Informationen zu EINEM Gesamtergebnis zusammen. Da die Kacheln überlappen,
+zähle gleiche Werte/Bauteile NICHT doppelt. Übersieh nichts — gerade kleine Maß- und
+DN-Zahlen sind jetzt gut lesbar.` : '';
         const text = await geminiVision({
-          systemPrompt: combinedPrompt,
-          userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}. Liefere das vollständige JSON inkl. _rawText.`,
-          fileBase64: base64,
-          mimeType: docMime,
+          systemPrompt: combinedPrompt + tilePrompt,
+          userPrompt: `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}${useTiles ? ' (in Teilabschnitten geliefert)' : ''}. Liefere das vollständige JSON inkl. _rawText.`,
+          ...(useTiles ? { images: tileImages } : { fileBase64: base64, mimeType: docMime }),
           jsonMode: true,
-          // Output-Tokens begrenzen: die autoregressive Generierung ist der Latenz-
-          // Treiber. Kompakter _rawText + 24k-Limit hält große Pläne unter dem 150s-Limit.
-          maxTokens: 24000,
-          // MEDIUM-Auflösung: große hochauflösende Planblätter (1 Sheet ~10 MP) sonst
-          // >150s. Im Hochgenau-Modus (Pro) volle Auflösung für maximale Lesbarkeit.
-          mediaResolution: primaryVisionModel === 'gemini-2.5-pro' ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
+          // Bei Kacheln darf der _rawText länger sein (mehr Detail) → 32k. Sonst 24k
+          // (Output-Generierung ist der Latenz-Treiber beim großen Einzelbild).
+          maxTokens: useTiles ? 32000 : 24000,
+          // Kacheln sind klein → HIGH-Auflösung ist bezahlbar und liest Details.
+          // Großes Einzelbild → MEDIUM gegen 150s-Timeout (HIGH nur im Pro-Modus).
+          mediaResolution: (useTiles || primaryVisionModel === 'gemini-2.5-pro') ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
           model: primaryVisionModel,
         });
         extracted = parseJsonResponse<Record<string, unknown>>(text);
-        analysisMethod = `single-combined-${primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash'}`;
+        analysisMethod = `${useTiles ? `tiled-${tileImages.length}-` : 'single-'}combined-${primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash'}`;
         extracted._analysisMethod = analysisMethod;
+        extracted._tileCount = useTiles ? tileImages.length : 0;
 
         // Deterministischer Parser auf MEHRERE Textquellen:
         // _rawText + alle texts[].content + Eindeckungs-Evidenz zusammenführen,
