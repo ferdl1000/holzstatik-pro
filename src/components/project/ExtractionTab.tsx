@@ -3,10 +3,47 @@ import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { ConfidenceBadge } from '@/components/shared/ConfidenceBadge';
 import { SourceTag } from '@/components/shared/SourceTag';
-import { Bot, Type, Ruler, Tag, AlertTriangle, Database } from 'lucide-react';
+import { Bot, Type, Ruler, Tag, AlertTriangle, Database, CheckCircle2, XCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 
 interface ExtractionTabProps { project: Project; projectId?: string; }
+
+interface ReportRow { feld: string; status: 'gelesen' | 'angenommen' | 'fehlt'; wert: string; }
+
+function LeseReport({ rows, summary }: { rows: ReportRow[]; summary?: { gelesen: number; gesamt: number; prozent: number } }) {
+  const offen = rows.filter(r => r.status === 'fehlt');
+  return (
+    <SectionCard
+      title="Lese-Report — was wurde erkannt?"
+      subtitle="Vollständigkeits-Check: jedes Kernfeld mit Status. Offene Punkte bitte im jeweiligen Reiter prüfen/ergänzen."
+      headerRight={summary ? (
+        <span className={`text-xs font-mono font-semibold ${summary.prozent >= 80 ? 'text-status-green' : summary.prozent >= 50 ? 'text-status-yellow' : 'text-status-red'}`}>
+          {summary.gelesen}/{summary.gesamt} ({summary.prozent}%)
+        </span>
+      ) : undefined}
+    >
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+        {rows.map((r) => (
+          <div key={r.feld} className="flex items-center justify-between text-xs border-b border-border/50 py-1">
+            <span className="flex items-center gap-1.5">
+              {r.status === 'fehlt'
+                ? <XCircle className="h-3.5 w-3.5 text-status-red shrink-0" />
+                : <CheckCircle2 className="h-3.5 w-3.5 text-status-green shrink-0" />}
+              <span className="text-muted-foreground">{r.feld}</span>
+            </span>
+            <span className={`font-mono ${r.status === 'fehlt' ? 'text-status-red' : 'text-foreground'}`}>{r.wert}</span>
+          </div>
+        ))}
+      </div>
+      {offen.length > 0 && (
+        <p className="text-xs text-status-yellow mt-3 flex items-start gap-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          {offen.length} Punkt(e) konnten nicht sicher gelesen werden: <strong>{offen.map(o => o.feld).join(', ')}</strong>. Bitte im Plan prüfen oder Hochgenau-Modus / Neu-Analyse nutzen.
+        </p>
+      )}
+    </SectionCard>
+  );
+}
 
 export function ExtractionTab({ project, projectId }: ExtractionTabProps) {
   const [dbExtraction, setDbExtraction] = useState<any>(null);
@@ -28,8 +65,10 @@ export function ExtractionTab({ project, projectId }: ExtractionTabProps) {
 
   const extraction = project.documents[0]?.extractedData;
   const aiData = dbExtraction;
+  const report = (project as any).analysisReport as ReportRow[] | undefined;
+  const reportSummary = (project as any).analysisReportSummary as { gelesen: number; gesamt: number; prozent: number } | undefined;
 
-  if (!extraction && !aiData) {
+  if (!extraction && !aiData && !report) {
     return (
       <div className="p-6 flex flex-col items-center justify-center h-64 space-y-3">
         <Database className="h-10 w-10 text-muted-foreground/30" />
@@ -41,6 +80,9 @@ export function ExtractionTab({ project, projectId }: ExtractionTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      {/* Lese-Report: Vollständigkeits-Check */}
+      {report && report.length > 0 && <LeseReport rows={report} summary={reportSummary} />}
+
       {/* AI extraction results from DB */}
       {aiData && (
         <SectionCard

@@ -856,6 +856,37 @@ serve(async (req) => {
       projectUpdate.unreliableAreas = extracted.unreliableAreas;
     }
 
+    // === LESE-REPORT: explizite Vollständigkeits-Checkliste ===
+    // Damit der Nutzer nach der Analyse GENAU sieht, was sicher gelesen wurde und
+    // was geprüft werden sollte — nichts bleibt unbemerkt ungelesen.
+    {
+      const rp0 = (projectUpdate.roofParts as any[] | undefined)?.[0];
+      const g = projectUpdate.geometry as any;
+      const report: Array<{ feld: string; status: 'gelesen' | 'angenommen' | 'fehlt'; wert: string }> = [];
+      const addR = (feld: string, val: any, ok?: boolean) => {
+        const has = ok ?? (val != null && val !== 0 && val !== '' && val !== 'unbekannt');
+        report.push({ feld, status: has ? 'gelesen' : 'fehlt', wert: has ? String(val) : '—' });
+      };
+      addR('Bauadresse / Ort', projectUpdate.address?.city);
+      addR('Seehöhe / Zonen', projectUpdate.address?.elevation ? `${projectUpdate.address.elevation} m` : null);
+      addR('Gebäudelänge', g?.length?.value ? `${g.length.value} m` : null);
+      addR('Gebäudebreite', g?.width?.value ? `${g.width.value} m` : null);
+      addR('Firsthöhe', g?.ridgeHeight?.value ? `${g.ridgeHeight.value} m` : null);
+      addR('Traufhöhe', g?.eavesHeight?.value ? `${g.eavesHeight.value} m` : null);
+      addR('Dachneigung (Hauptdach)', rp0?.geometry?.pitch ? `${rp0.geometry.pitch}°` : null);
+      addR('Dachform', rp0?.form);
+      addR('Anzahl Dachteile', (projectUpdate.roofParts as any[] | undefined)?.length || 0);
+      addR('Eindeckung', projectUpdate.coveringType?.type);
+      addR('Tragsystem', projectUpdate.structuralSystem?.type);
+      addR('Brandschutz (GK/REI)', projectUpdate.fireProtection?.gk);
+      addR('Decken', (projectUpdate.ceilings as any[] | undefined)?.length || 0);
+      const gelesen = report.filter(r => r.status === 'gelesen').length;
+      projectUpdate.analysisReport = report;
+      projectUpdate.analysisReportSummary = { gelesen, gesamt: report.length, prozent: Math.round(gelesen / report.length * 100) };
+      const fehlend = report.filter(r => r.status === 'fehlt').map(r => r.feld);
+      log.push(`✓ Lese-Report: ${gelesen}/${report.length} Kernfelder gelesen${fehlend.length ? ` — offen: ${fehlend.join(', ')}` : ''}`);
+    }
+
     // === Selbst-Lernen: Adressen + Planer persistieren (für nächsten Lauf + Korrektur-Capture) ===
     if (Array.isArray(extracted.addresses) && extracted.addresses.length > 0) {
       projectUpdate.addresses = extracted.addresses;

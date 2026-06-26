@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
@@ -24,6 +24,22 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
     project.members, project.materials, project.loadCases,
     roofPitch, mainSpan
   );
+
+  // LIVE-Bemessung: rechnet automatisch neu, sobald sich Bauteile, Holzart/Material,
+  // Lasten oder Geometrie ändern. So muss der Endkunde nichts manuell auslösen —
+  // Holzart oder Balken ändern → sofort neue Ausnutzung. Fällt auf die gespeicherte
+  // Berechnung zurück, falls Voraussetzungen fehlen.
+  const liveResults = useMemo(() => {
+    if (prereqBlockers.length > 0 || roofPitch == null || mainSpan == null) {
+      return project.calculations || [];
+    }
+    try {
+      return calculateAllMembers(project.members, project.materials, project.loadCases, roofPitch, mainSpan);
+    } catch {
+      return project.calculations || [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.members, project.materials, project.loadCases, roofPitch, mainSpan, prereqBlockers.length]);
 
   const handleCalculate = () => {
     if (prereqBlockers.length > 0) {
@@ -121,17 +137,22 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
         ))}
       </div>
 
-      {project.calculations.length === 0 && !calculating ? (
+      {liveResults.length === 0 && !calculating ? (
         <div className="text-center py-16 space-y-4">
           <Calculator className="h-12 w-12 text-muted-foreground/30 mx-auto" />
-          <p className="text-muted-foreground">Noch keine Berechnung durchgeführt</p>
+          <p className="text-muted-foreground">Noch keine Berechnung möglich</p>
           <p className="text-xs text-muted-foreground">
-            Bestätigen Sie Geometrie, Tragwerk, Lasten und Bauteile zuerst.
+            Geometrie, Tragwerk, Lasten und Bauteile werden benötigt.
           </p>
         </div>
-      ) : null}
+      ) : (
+        <div className="rounded-md bg-status-green-bg/40 border border-status-green/20 px-3 py-2 text-xs text-foreground/70 flex items-center gap-2">
+          <CheckCircle className="h-3.5 w-3.5 text-status-green" />
+          Live-Bemessung: aktualisiert sich automatisch, wenn du Holzart, Querschnitt, Lasten oder Geometrie änderst.
+        </div>
+      )}
 
-      {project.calculations.map((calc) => (
+      {liveResults.map((calc) => (
         <SectionCard
           key={calc.id}
           title={calc.memberName}
