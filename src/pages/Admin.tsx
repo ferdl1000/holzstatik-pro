@@ -227,6 +227,19 @@ const Admin = () => {
               title="Analyse-Genauigkeit"
               subtitle="Standard nutzt Gemini Flash (kostenlos) + Geometrie-Schiedsrichter für die Dachneigung. Hochgenau nutzt Gemini Pro für maximale Lese-Genauigkeit bei wichtigen Plänen."
             >
+              <div className="mb-4 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs space-y-1">
+                <p className="font-medium text-primary">💡 Empfehlung für den Produktivbetrieb (Endkunden)</p>
+                <p className="text-muted-foreground leading-relaxed">
+                  Trage oben unter <span className="font-mono">GOOGLE_AI_API_KEY</span> deinen{' '}
+                  <strong>eigenen, bezahlten Google-AI-Key</strong> ein (aistudio.google.com → „Get API key").
+                  Sobald er hinterlegt ist, nutzt die App <strong>automatisch</strong> den stabilen{' '}
+                  <span className="font-mono">gemini-2.5-pro</span> und dein eigenes (hohes) Kontingent —
+                  ohne Schalter. Das löst sowohl das Tageslimit (429-Abbrüche) als auch die schwankende
+                  Erkennung. {settings.some(s => s.key === 'GOOGLE_AI_API_KEY' && s.value?.length > 20)
+                    ? <span className="text-status-green font-medium">✓ Eigener Key erkannt — Pro-Modus aktiv.</span>
+                    : <span className="text-status-yellow font-medium">Noch kein eigener Key — App nutzt das geteilte Gratis-Kontingent (Flash).</span>}
+                </p>
+              </div>
               <div className="flex items-center justify-between rounded-md border p-4">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2">

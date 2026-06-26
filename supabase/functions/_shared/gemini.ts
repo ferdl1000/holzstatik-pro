@@ -15,6 +15,8 @@ export interface GeminiTextRequest {
   jsonMode?: boolean;
   /** Vision-Auflösung: niedriger = weniger Tokens/schneller bei großen Planblättern. */
   mediaResolution?: 'MEDIA_RESOLUTION_LOW' | 'MEDIA_RESOLUTION_MEDIUM' | 'MEDIA_RESOLUTION_HIGH';
+  /** Optionaler API-Key-Override (z.B. der bezahlte Key des Nutzers aus system_settings). */
+  apiKey?: string;
 }
 
 export interface GeminiVisionRequest extends GeminiTextRequest {
@@ -27,9 +29,9 @@ export interface GeminiVisionRequest extends GeminiTextRequest {
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
-function getKey(): string {
-  const key = Deno.env.get('GEMINI_API_KEY');
-  if (!key) throw new Error('GEMINI_API_KEY nicht konfiguriert in Supabase Secrets');
+function getKey(override?: string): string {
+  const key = (override && override.trim()) || Deno.env.get('GEMINI_API_KEY');
+  if (!key) throw new Error('Kein Gemini-API-Key: weder im Admin (GOOGLE_AI_API_KEY) noch in Supabase Secrets konfiguriert');
   return key;
 }
 
@@ -61,7 +63,7 @@ export async function geminiText(req: GeminiTextRequest): Promise<string> {
   };
   let lastError = '';
   for (const model of modelCandidates) {
-    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${getKey()}`;
+    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${getKey(req.apiKey)}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -115,7 +117,7 @@ export async function geminiVision(req: GeminiVisionRequest): Promise<string> {
 
   let lastError = '';
   for (const model of modelCandidates) {
-    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${getKey()}`;
+    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${getKey(req.apiKey)}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

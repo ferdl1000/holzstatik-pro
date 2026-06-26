@@ -798,9 +798,6 @@ serve(async (req) => {
     const { documentId, projectId, retryWith, focusOnMissing, useMultiStage, analysisQuality, learnedRulesPrompt } = await req.json();
     // Selbst-Lernen: vom Orchestrator mitgegebener Block bestätigter Korrekturen.
     const rulesBlock = typeof learnedRulesPrompt === 'string' ? learnedRulesPrompt : '';
-    // Hochgenau-Modus: gemini-2.5-pro für den Vision-Hauptcall (kostenpflichtig, höhere Lese-Genauigkeit).
-    // Standard (default): gemini-2.5-flash (kostenlos). Pro fällt bei Quota automatisch auf Flash zurück.
-    const primaryVisionModel = analysisQuality === 'hochgenau' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
     if (!documentId || !projectId) {
       return new Response(JSON.stringify({ error: 'documentId und projectId erforderlich' }),
         { status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
@@ -810,6 +807,23 @@ serve(async (req) => {
     const multiStage = useMultiStage !== false;
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+
+    // Bezahlten Gemini-Key des Nutzers aus dem Admin (system_settings) holen.
+    // Liegt einer vor → eigenes (höheres) Kontingent UND Pro-Modell als Default
+    // (deutlich stabilere Erkennung). Sonst kostenloser Shared-Key + Flash.
+    let userApiKey: string | undefined;
+    let userKeyPresent = false;
+    try {
+      const { data: ks } = await supabase.from('system_settings').select('key,value').in('key', ['GOOGLE_AI_API_KEY', 'GEMINI_API_KEY']);
+      const found = (ks || []).find((r: any) => typeof r.value === 'string' && r.value.trim().length > 20);
+      if (found) { userApiKey = found.value.trim(); userKeyPresent = true; }
+    } catch { /* kein Key in DB → Env-Key */ }
+
+    // Pro-Modell wenn: explizit Hochgenau ODER eigener (bezahlter) Key vorhanden und
+    // nicht ausdrücklich "standard" gewählt. So ist die App mit eigenem Key automatisch
+    // im stabilen Pro-Modus — ohne extra Schalter.
+    const usePro = analysisQuality === 'hochgenau' || (userKeyPresent && analysisQuality !== 'standard');
+    const primaryVisionModel = usePro ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
 
     const { data: doc } = await supabase.from('documents').select('*').eq('id', documentId).single();
     if (!doc) throw new Error('Dokument nicht gefunden');
@@ -901,6 +915,7 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
           // Großes Einzelbild → MEDIUM gegen 150s-Timeout (HIGH nur im Pro-Modus).
           mediaResolution: (useTiles || primaryVisionModel === 'gemini-2.5-pro') ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
           model: primaryVisionModel,
+          apiKey: userApiKey,
         });
         extracted = parseJsonResponse<Record<string, unknown>>(text);
         analysisMethod = `${useTiles ? `tiled-${tileImages.length}-` : 'single-'}combined-${primaryVisionModel === 'gemini-2.5-pro' ? 'pro' : 'flash'}`;
@@ -942,6 +957,7 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
             mimeType: docMime,
             jsonMode: true,
             maxTokens: 60000,
+            apiKey: userApiKey,
           });
           extracted = parseJsonResponse<Record<string, unknown>>(text);
           extracted._analysisMethod = 'single-stage-quota-fallback';
@@ -970,6 +986,7 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
         mimeType: docMime,
         jsonMode: true,
         maxTokens: 80000,
+        apiKey: userApiKey,
         ...(retryWith ? { model: retryWith as 'gemini-2.5-flash' } : {}),
       });
       extracted = parseJsonResponse<Record<string, unknown>>(text);
