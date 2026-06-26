@@ -9,16 +9,18 @@ import { supabase } from '@/integrations/supabase/client';
 interface ExtractionTabProps { project: Project; projectId?: string; }
 
 interface ReportRow { feld: string; status: 'gelesen' | 'angenommen' | 'fehlt'; wert: string; }
+interface ReportSummary { gelesen: number; angenommen?: number; offen?: number; gesamt: number; prozent: number; }
 
-function LeseReport({ rows, summary }: { rows: ReportRow[]; summary?: { gelesen: number; gesamt: number; prozent: number } }) {
+function LeseReport({ rows, summary }: { rows: ReportRow[]; summary?: ReportSummary }) {
   const offen = rows.filter(r => r.status === 'fehlt');
+  const angenommen = rows.filter(r => r.status === 'angenommen');
   return (
     <SectionCard
       title="Lese-Report — was wurde erkannt?"
-      subtitle="Vollständigkeits-Check: jedes Kernfeld mit Status. Offene Punkte bitte im jeweiligen Reiter prüfen/ergänzen."
+      subtitle="Vollständigkeits-Check: jedes Kernfeld mit Status. Grün = aus Plan gelesen, gelb = sinnvoll angenommen (jederzeit änderbar), rot = bitte prüfen."
       headerRight={summary ? (
-        <span className={`text-xs font-mono font-semibold ${summary.prozent >= 80 ? 'text-status-green' : summary.prozent >= 50 ? 'text-status-yellow' : 'text-status-red'}`}>
-          {summary.gelesen}/{summary.gesamt} ({summary.prozent}%)
+        <span className={`text-xs font-mono font-semibold ${summary.prozent >= 100 ? 'text-status-green' : summary.prozent >= 80 ? 'text-status-yellow' : 'text-status-red'}`}>
+          {summary.prozent}% vollständig
         </span>
       ) : undefined}
     >
@@ -28,17 +30,25 @@ function LeseReport({ rows, summary }: { rows: ReportRow[]; summary?: { gelesen:
             <span className="flex items-center gap-1.5">
               {r.status === 'fehlt'
                 ? <XCircle className="h-3.5 w-3.5 text-status-red shrink-0" />
-                : <CheckCircle2 className="h-3.5 w-3.5 text-status-green shrink-0" />}
+                : r.status === 'angenommen'
+                  ? <AlertTriangle className="h-3.5 w-3.5 text-status-yellow shrink-0" />
+                  : <CheckCircle2 className="h-3.5 w-3.5 text-status-green shrink-0" />}
               <span className="text-muted-foreground">{r.feld}</span>
             </span>
-            <span className={`font-mono ${r.status === 'fehlt' ? 'text-status-red' : 'text-foreground'}`}>{r.wert}</span>
+            <span className={`font-mono ${r.status === 'fehlt' ? 'text-status-red' : r.status === 'angenommen' ? 'text-status-yellow' : 'text-foreground'}`}>{r.wert}</span>
           </div>
         ))}
       </div>
-      {offen.length > 0 && (
+      {angenommen.length > 0 && (
         <p className="text-xs text-status-yellow mt-3 flex items-start gap-1.5">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          {offen.length} Punkt(e) konnten nicht sicher gelesen werden: <strong>{offen.map(o => o.feld).join(', ')}</strong>. Bitte im Plan prüfen oder Hochgenau-Modus / Neu-Analyse nutzen.
+          {angenommen.length} Wert(e) angenommen (nicht eindeutig im Plan): <strong>{angenommen.map(o => o.feld).join(', ')}</strong>. Im jeweiligen Reiter jederzeit anpassbar — danach wird automatisch neu gerechnet.
+        </p>
+      )}
+      {offen.length > 0 && (
+        <p className="text-xs text-status-red mt-2 flex items-start gap-1.5">
+          <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          {offen.length} Punkt(e) offen: <strong>{offen.map(o => o.feld).join(', ')}</strong>. Bitte im Plan prüfen oder Hochgenau-Modus / Neu-Analyse nutzen.
         </p>
       )}
     </SectionCard>
@@ -66,7 +76,7 @@ export function ExtractionTab({ project, projectId }: ExtractionTabProps) {
   const extraction = project.documents[0]?.extractedData;
   const aiData = dbExtraction;
   const report = (project as any).analysisReport as ReportRow[] | undefined;
-  const reportSummary = (project as any).analysisReportSummary as { gelesen: number; gesamt: number; prozent: number } | undefined;
+  const reportSummary = (project as any).analysisReportSummary as ReportSummary | undefined;
 
   if (!extraction && !aiData && !report) {
     return (

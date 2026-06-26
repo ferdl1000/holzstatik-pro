@@ -860,12 +860,25 @@ serve(async (req) => {
     // Damit der Nutzer nach der Analyse GENAU sieht, was sicher gelesen wurde und
     // was geprüft werden sollte — nichts bleibt unbemerkt ungelesen.
     {
+      // DEFAULTS für nicht gelesene Felder, damit NICHTS leer bleibt (Endkunde-fertig).
+      // Jeder Default wird im Report als „angenommen" markiert (transparent, gelb).
+      const isAgrar = JSON.stringify(projectUpdate.roofParts || []).toLowerCase().match(/stall|scheune|halle|landwirt|wirtschaftsgeb|maschinenhalle/) != null
+        || (projectUpdate.structuralSystem?.type || '').includes('halle');
+      if (!projectUpdate.fireProtection?.gk) {
+        const gk = isAgrar ? 'GK1' : 'GK2';
+        projectUpdate.fireProtection = { ...(projectUpdate.fireProtection || {}), gk, reiClass: gk === 'GK1' ? 'R30' : 'REI60', assumed: true };
+      }
+      if (!projectUpdate.coveringType?.type || projectUpdate.coveringType?.type === 'unbekannt') {
+        projectUpdate.coveringType = { ...(projectUpdate.coveringType || {}), type: 'tile_clay', assumed: true };
+      }
+
       const rp0 = (projectUpdate.roofParts as any[] | undefined)?.[0];
       const g = projectUpdate.geometry as any;
-      const report: Array<{ feld: string; status: 'gelesen' | 'angenommen' | 'fehlt'; wert: string }> = [];
-      const addR = (feld: string, val: any, ok?: boolean) => {
-        const has = ok ?? (val != null && val !== 0 && val !== '' && val !== 'unbekannt');
-        report.push({ feld, status: has ? 'gelesen' : 'fehlt', wert: has ? String(val) : '—' });
+      type RStat = 'gelesen' | 'angenommen' | 'fehlt';
+      const report: Array<{ feld: string; status: RStat; wert: string }> = [];
+      const addR = (feld: string, val: any, assumed = false) => {
+        const has = val != null && val !== 0 && val !== '' && val !== 'unbekannt';
+        report.push({ feld, status: has ? (assumed ? 'angenommen' : 'gelesen') : 'fehlt', wert: has ? String(val) : '—' });
       };
       addR('Bauadresse / Ort', projectUpdate.address?.city);
       addR('Seehöhe / Zonen', projectUpdate.address?.elevation ? `${projectUpdate.address.elevation} m` : null);
@@ -876,15 +889,19 @@ serve(async (req) => {
       addR('Dachneigung (Hauptdach)', rp0?.geometry?.pitch ? `${rp0.geometry.pitch}°` : null);
       addR('Dachform', rp0?.form);
       addR('Anzahl Dachteile', (projectUpdate.roofParts as any[] | undefined)?.length || 0);
-      addR('Eindeckung', projectUpdate.coveringType?.type);
+      addR('Eindeckung', projectUpdate.coveringType?.type, projectUpdate.coveringType?.assumed === true);
       addR('Tragsystem', projectUpdate.structuralSystem?.type);
-      addR('Brandschutz (GK/REI)', projectUpdate.fireProtection?.gk);
+      addR('Brandschutz (GK/REI)', projectUpdate.fireProtection?.gk, projectUpdate.fireProtection?.assumed === true);
       addR('Decken', (projectUpdate.ceilings as any[] | undefined)?.length || 0);
       const gelesen = report.filter(r => r.status === 'gelesen').length;
-      projectUpdate.analysisReport = report;
-      projectUpdate.analysisReportSummary = { gelesen, gesamt: report.length, prozent: Math.round(gelesen / report.length * 100) };
+      const angenommen = report.filter(r => r.status === 'angenommen').length;
       const fehlend = report.filter(r => r.status === 'fehlt').map(r => r.feld);
-      log.push(`✓ Lese-Report: ${gelesen}/${report.length} Kernfelder gelesen${fehlend.length ? ` — offen: ${fehlend.join(', ')}` : ''}`);
+      projectUpdate.analysisReport = report;
+      projectUpdate.analysisReportSummary = {
+        gelesen, angenommen, offen: fehlend.length, gesamt: report.length,
+        prozent: Math.round((gelesen + angenommen) / report.length * 100),
+      };
+      log.push(`✓ Lese-Report: ${gelesen} gelesen, ${angenommen} angenommen, ${fehlend.length} offen${fehlend.length ? ` (${fehlend.join(', ')})` : ' — vollständig'}`);
     }
 
     // === Selbst-Lernen: Adressen + Planer persistieren (für nächsten Lauf + Korrektur-Capture) ===
