@@ -495,10 +495,18 @@ serve(async (req) => {
     const pitch = find('neigung') || find('dachneigung');
     const eaves = find('trauf');
     const ridge = find('first');
-    if (length || width || pitch) {
+    // Fallback für Scan-Pläne: unbeschriftete Maße ('Maß') als Länge/Breite nutzen,
+    // wenn keine beschrifteten Geb.-Maße da sind. Größtes = Länge, nächstes = Breite.
+    const bareDims = [...new Set(dims.filter(d => d.label === 'Maß').map(d => d.value))].sort((a, b) => b - a);
+    const lengthVal = length?.value || bareDims[0] || 0;
+    const widthVal = width?.value || bareDims.find(v => v < lengthVal) || bareDims[1] || 0;
+    const lengthConf = length?.confidence ?? (bareDims[0] ? 0.4 : 0);
+    const widthConf = width?.confidence ?? (widthVal ? 0.4 : 0);
+    if (lengthVal || widthVal || length || width || pitch) {
+      if (!length && lengthVal) log.push(`ℹ Geometrie: Länge ${lengthVal}m aus unbeschriftetem Maß (Scan) — bitte prüfen`);
       projectUpdate.geometry = {
-        length:      { value: length?.value || 0, unit: 'm',  confidence: length?.confidence || 0, source: 'extracted' },
-        width:       { value: width?.value  || 0, unit: 'm',  confidence: width?.confidence  || 0, source: 'extracted' },
+        length:      { value: lengthVal, unit: 'm',  confidence: lengthConf, source: length ? 'extracted' : 'derived' },
+        width:       { value: widthVal,  unit: 'm',  confidence: widthConf,  source: width ? 'extracted' : 'derived' },
         roofPitch:   { value: pitch?.value  || 0, unit: '°',  confidence: pitch?.confidence  || 0, source: 'extracted' },
         eavesHeight: { value: eaves?.value  || 0, unit: 'm',  confidence: eaves?.confidence  || 0, source: 'extracted' },
         ridgeHeight: { value: ridge?.value  || 0, unit: 'm',  confidence: ridge?.confidence  || 0, source: ridge ? 'extracted' : 'calculated' },

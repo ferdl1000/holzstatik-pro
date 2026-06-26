@@ -60,8 +60,11 @@ export function parseDachneigung(text: string): ParsedFacts['dnMarkers'] {
 
   // Fallback OHNE Gradsymbol: "Dachneigung 5" / "DN 10" — auf gescannten/OCR-Plänen
   // geht das °-Zeichen oft verloren. Das Wort "Dachneigung"/"DN" macht die Gradzahl
-  // eindeutig. Konservativ: 1–60°, und NICHT direkt von einer Einheit (cm/m/%) gefolgt.
-  const dnNoDegRe = /(?:Dachneigung|DN)\s*[:=]?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)(?!\s*(?:[.,]?\d)|\s*(?:cm|mm|m\b|%|°|º|∘|Grad))/gi;
+  // eindeutig. Konservativ: 1–60°. Ausschluss NUR bei direkt anschließender Ziffer
+  // (z.B. "DN 1058" → nicht "10") ODER direkt folgender Einheit (cm/mm/m/% = Nennweite).
+  // Leerzeichen-getrennter Folgetext (z.B. "DN 10  STALL" oder "DN 10 DN 15") ist erlaubt
+  // — wichtig für verrauschten OCR-Text.
+  const dnNoDegRe = /(?:Dachneigung|DN)\s*[:=]?\s*(?:von\s*)?(\d{1,2}(?:[.,]\d+)?)(?![.,]?\d|\s*(?:cm|mm|m\b|%|°|º|∘|Grad))/gi;
   while ((m = dnNoDegRe.exec(text)) !== null) {
     const v = num(m[1]);
     if (v >= 1 && v <= 60) {
@@ -101,6 +104,22 @@ export function parseDimensions(text: string): ParsedFacts['dimensions'] {
     while ((m = re.exec(text)) !== null) {
       const v = num(m[1]);
       if (v > 0 && v < 200) dims.push({ value: v, label, raw: m[0] });
+    }
+  }
+
+  // FALLBACK für Scan-/OCR-Pläne: dort stehen Maße OHNE Beschriftung verstreut
+  // ("8,00m", "23,0 m", "3,50m"). Diese als unbeschriftete Gebäude-Maße sammeln,
+  // damit die Geometrie-Ableitung etwas hat. Nur plausible Bau-Maße mit Dezimalstelle
+  // (vermeidet z.B. Rohr-Nennweiten "DN150" oder ganze Stückzahlen).
+  const bareRe = /(?<![\d.,])(\d{1,2}[.,]\d{1,3})\s*m\b/g;
+  let bm: RegExpExecArray | null;
+  const seenBare = new Set<number>(dims.map(d => Math.round(d.value * 100) / 100)); // bereits beschriftet erfasste überspringen
+  while ((bm = bareRe.exec(text)) !== null) {
+    const v = num(bm[1]);
+    // Gebäude-Maße: 1–60 m. Kleinkram (<1 m, Bauteilstärken) und Unsinn raus.
+    if (v >= 1 && v <= 60) {
+      const rounded = Math.round(v * 100) / 100;
+      if (!seenBare.has(rounded)) { seenBare.add(rounded); dims.push({ value: rounded, label: 'Maß', raw: bm[0].trim() }); }
     }
   }
 
