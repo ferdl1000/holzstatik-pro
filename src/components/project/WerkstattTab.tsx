@@ -13,9 +13,10 @@ import type { Project } from '@/types/project';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Wrench, Download, Clock, AlertTriangle, CheckCircle2, Layers, ChevronsRight, PackageOpen, FileCode2, Box } from 'lucide-react';
+import { Wrench, Download, Clock, AlertTriangle, CheckCircle2, Layers, ChevronsRight, PackageOpen, FileCode2, Box, Ruler, Printer } from 'lucide-react';
 import { downloadBTL, exportToBTL } from '@/lib/cnc/btl-export';
 import { optimizeCutting } from '@/lib/cnc/schnittliste';
+import { buildAbbundplan } from '@/lib/cnc/abbundwinkel';
 import { montageReihenfolge, gesamtdauer } from '@/lib/cnc/montagereihenfolge';
 import { downloadIFC, downloadIFC2x3 } from '@/lib/sema/ifc-export';
 import { downloadDXF } from '@/lib/sema/dxf-export';
@@ -81,6 +82,15 @@ export function WerkstattTab({ project }: WerkstattTabProps) {
   const montageSchritte = useMemo(() => montageReihenfolge(members), [members]);
   const totalDauer = useMemo(() => gesamtdauer(montageSchritte), [montageSchritte]);
 
+  // Echte Dachneigung als Fallback (wenn ein Bauteil keinem Dachteil zugeordnet ist)
+  const fallbackPitch = project.geometry?.roofPitch?.value || 30;
+  const fallbackForm = project.roofType?.form || 'satteldach';
+  const roofParts = (project as any).roofParts as import('@/types/roofParts').RoofPart[] | undefined;
+  const abbundplan = useMemo(
+    () => buildAbbundplan(members, roofParts, fallbackPitch, fallbackForm),
+    [members, roofParts, fallbackPitch, fallbackForm],
+  );
+
   // ── Komplett-ZIP ──────────────────────────────────────────────────────────
   async function handleZipDownload() {
     setZipLoading(true);
@@ -104,7 +114,7 @@ export function WerkstattTab({ project }: WerkstattTabProps) {
       }
 
       // BTL erzeugen
-      const btl = exportToBTL(members, project.name);
+      const btl = exportToBTL(members, project.name, roofParts, fallbackPitch, fallbackForm);
 
       const blob = await buildProjectZip({
         project,
@@ -228,7 +238,7 @@ export function WerkstattTab({ project }: WerkstattTabProps) {
           <div className="flex flex-wrap gap-2 items-center">
             <Button
               size="sm"
-              onClick={() => downloadBTL(members, project.name)}
+              onClick={() => downloadBTL(members, project.name, roofParts, fallbackPitch, fallbackForm)}
               className="gap-2"
             >
               <Download className="h-3.5 w-3.5" />
@@ -239,10 +249,64 @@ export function WerkstattTab({ project }: WerkstattTabProps) {
           </div>
           <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
             <li>Alle Querschnitte, Längen und Materialklassen enthalten</li>
-            <li>Sparren: First- und Traufschnitt-Kerven vorberechnet</li>
+            <li>Sparren: First- und Traufschnitt-Kerven aus der ECHTEN Dachneigung je Dachteil berechnet</li>
             <li>Bauteil-Rolle (Sparren, Pfette, BSH…) als BTL-Role exportiert</li>
             <li>Stückzahlen pro Bauteiltyp im Quantity-Attribut</li>
           </ul>
+        </CardContent>
+      </Card>
+
+      {/* ── 1b. Abbundliste — echte Schnittwinkel je Bauteil, druckbar ────────── */}
+      <Card className="print:shadow-none">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Ruler className="h-4 w-4 text-red-500" />
+            Abbundliste — Schnittwinkel je Bauteil
+          </CardTitle>
+          <Button size="sm" variant="outline" className="gap-1.5 print:hidden" onClick={() => window.print()}>
+            <Printer className="h-3.5 w-3.5" />Drucken
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Schmiegen (Schnittwinkel) aus der tatsächlichen Dachneigung des jeweiligen Dachteils berechnet —
+            zum direkten Anreißen/Zuschneiden auf der Baustelle. Bei Walmdach-Gratsparren ist der Winkel eine
+            Näherung und vor Ort mit der Schmiege zu kontrollieren.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="data-table text-xs">
+              <thead>
+                <tr>
+                  <th>Bauteil</th>
+                  <th>Dachteil</th>
+                  <th>Neigung</th>
+                  <th>Länge</th>
+                  <th>Querschnitt</th>
+                  <th>Stk.</th>
+                  <th>Schnitt Start</th>
+                  <th>Schnitt Ende</th>
+                </tr>
+              </thead>
+              <tbody>
+                {abbundplan.map((cut) => {
+                  const m = members.find((mm) => mm.id === cut.memberId);
+                  if (!m) return null;
+                  return (
+                    <tr key={cut.memberId}>
+                      <td className="font-medium">{cut.memberName}</td>
+                      <td className="text-muted-foreground">{cut.pitchSource}</td>
+                      <td className="value-display">{cut.pitchDeg.toFixed(1)}°</td>
+                      <td className="value-display">{mmToM(Math.round(m.length * 1000))}</td>
+                      <td className="value-display">{m.crossSection}</td>
+                      <td className="value-display">{m.quantity}</td>
+                      <td>{cut.startCut.label}</td>
+                      <td>{cut.endCut.label}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 

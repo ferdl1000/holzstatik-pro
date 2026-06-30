@@ -1,21 +1,23 @@
 /**
- * OpenRouter-Vision — Zugang zu STÄRKEREN, ebenfalls KOSTENLOSEN Bildmodellen als
- * Gemini Flash (z.B. Qwen2.5-VL, Llama-3.2-Vision). OpenAI-kompatible Chat-API.
+ * OpenRouter-Vision — Zugang zu kostenlosen Bildmodellen als Alternative/Ergänzung
+ * zu Gemini Flash. OpenAI-kompatible Chat-API.
  *
- * Aktiv nur, wenn das Supabase-Secret OPENROUTER_API_KEY gesetzt ist. Sonst/Fehler →
- * der Aufrufer fällt automatisch auf Gemini zurück (kein Risiko für den Bestand).
+ * Aktiv nur, wenn ein OPENROUTER_API_KEY vorliegt (Admin-Einstellung oder Supabase-
+ * Secret). Sonst/Fehler → der Aufrufer fällt automatisch auf Gemini zurück (kein
+ * Risiko für den Bestand).
  *
- * Free-Modelle (Stand 2026, ":free"-Tag = kostenlos):
- *   qwen/qwen2.5-vl-72b-instruct:free   (stark bei Plänen/Dokumenten — empfohlen)
- *   meta-llama/llama-3.2-90b-vision-instruct:free
- *   google/gemini-2.0-flash-exp:free
+ * WICHTIG: OpenRouters Free-Tier-Modelle wechseln häufig (alte Slugs verschwinden
+ * ersatzlos, z.B. wurde qwen2.5-vl:free Mitte 2026 entfernt). Diese Liste wurde am
+ * 2026-06-30 live gegen GET /api/v1/models verifiziert (image-Modalität + :free-Tag).
+ * Bei erneutem Totalausfall: Liste mit demselben Filter neu abgleichen.
  */
 const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 export const OPENROUTER_FREE_MODELS = [
-  'qwen/qwen2.5-vl-72b-instruct:free',
-  'meta-llama/llama-3.2-90b-vision-instruct:free',
-  'google/gemini-2.0-flash-exp:free',
+  'nvidia/nemotron-nano-12b-v2-vl:free',          // live getestet: Vision + JSON-Modus OK
+  'google/gemma-4-31b-it:free',                    // stärker, aber öfter ausgelastet (429)
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
 ];
 
 export function openRouterAvailable(): boolean {

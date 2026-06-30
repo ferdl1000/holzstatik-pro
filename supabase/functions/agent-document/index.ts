@@ -920,11 +920,14 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
           try {
             text = await openRouterVision({
               systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
-              images: orImages, maxTokens: useTiles ? 32000 : 24000, jsonMode: true,
+              // OR-Modelle: 6000 Token reichen für einen strukturierten Plan-JSON.
+              // 32k würde die Generierung zu lang machen → Timeout.
+              images: orImages, maxTokens: 6000, jsonMode: true,
               apiKey: openRouterKey,
             });
             reader = 'openrouter';
           } catch (_orErr) {
+            console.error('[agent-document] OpenRouter fehlgeschlagen, falle auf Gemini zurück:', _orErr instanceof Error ? _orErr.message : String(_orErr));
             text = await geminiVision({
               systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
               ...(useTiles ? { images: tileImages } : { fileBase64: base64, mimeType: docMime }),

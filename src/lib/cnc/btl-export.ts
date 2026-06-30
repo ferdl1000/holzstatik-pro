@@ -4,6 +4,8 @@
  */
 
 import type { TimberMember } from '@/types/project';
+import type { RoofPart, RoofFormType } from '@/types/roofParts';
+import { buildAbbundplan, type MemberCutPlan } from './abbundwinkel';
 
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
@@ -23,16 +25,13 @@ function btlBeamRole(type: TimberMember['type']): string {
   }
 }
 
-/** Winkel-Schätzung für Sparren-Firstschnitt (Grat/Pult) – Platzhalter 0° wenn unbekannt */
-function estimateRoofAngle(member: TimberMember): number {
-  // Wenn Membertyp Sparren: Standardneigung 30° als Fallback
-  return member.type === 'sparren' ? 30 : 0;
-}
-
-/** Kerven/Notches generieren – einfache Heuristic für Firstschnitt + Traufschnitt bei Sparren */
-function buildNotches(member: TimberMember): string {
-  if (member.type !== 'sparren') return '';
-  const angle = estimateRoofAngle(member);
+/**
+ * Kerven/Notches aus dem ECHTEN Schnittwinkel (Dachneigung des zugehörigen
+ * Dachteils) — nicht mehr hartcodiert. cutPlan kommt aus buildAbbundplan().
+ */
+function buildNotches(member: TimberMember, cutPlan: MemberCutPlan | undefined): string {
+  if (member.type !== 'sparren' && member.type !== 'nebentraeger') return '';
+  const angle = cutPlan?.startCut.angleDeg ?? 0;
   return `
         <Notches>
           <Notch Type="JackRafterCut" Position="Start" Angle="${angle}" Side="Top" Depth="${(member.height * 0.5).toFixed(0)}"/>
@@ -42,12 +41,12 @@ function buildNotches(member: TimberMember): string {
 
 // ─── XML-Aufbau ───────────────────────────────────────────────────────────────
 
-function memberToBeamXml(member: TimberMember, id: number): string {
+function memberToBeamXml(member: TimberMember, id: number, cutPlan: MemberCutPlan | undefined): string {
   const lengthMM = Math.round(member.length * 1000); // m → mm
   const width    = Math.round(member.width);
   const height   = Math.round(member.height);
   const role     = btlBeamRole(member.type);
-  const notches  = buildNotches(member);
+  const notches  = buildNotches(member, cutPlan);
 
   // Querschnitt-Label: "b x h"
   const cs = `${width}x${height}`;
@@ -69,11 +68,21 @@ function escapeXml(s: string): string {
 
 /**
  * Erzeugt BTLX 2.2 XML-String für eine Liste von TimberMembers.
+ * roofParts/fallbackPitch/fallbackForm: für ECHTE Schnittwinkel je Bauteil
+ * (aus der tatsächlichen Dachneigung) statt hartcodierter Werte.
  */
-export function exportToBTL(members: TimberMember[], projectName: string): string {
+export function exportToBTL(
+  members: TimberMember[],
+  projectName: string,
+  roofParts?: RoofPart[],
+  fallbackPitchDeg = 30,
+  fallbackForm: RoofFormType = 'satteldach',
+): string {
   const now = new Date().toISOString();
+  const cutPlans = buildAbbundplan(members, roofParts, fallbackPitchDeg, fallbackForm);
+  const cutById = new Map(cutPlans.map((c) => [c.memberId, c]));
   const beams = members
-    .map((m, i) => memberToBeamXml(m, i + 1))
+    .map((m, i) => memberToBeamXml(m, i + 1, cutById.get(m.id)))
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -95,8 +104,14 @@ ${beams}
 /**
  * Erzeugt BTLX-Datei und startet Browser-Download.
  */
-export function downloadBTL(members: TimberMember[], projectName: string): void {
-  const xml  = exportToBTL(members, projectName);
+export function downloadBTL(
+  members: TimberMember[],
+  projectName: string,
+  roofParts?: RoofPart[],
+  fallbackPitchDeg = 30,
+  fallbackForm: RoofFormType = 'satteldach',
+): void {
+  const xml  = exportToBTL(members, projectName, roofParts, fallbackPitchDeg, fallbackForm);
   const blob = new Blob([xml], { type: 'application/xml;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
