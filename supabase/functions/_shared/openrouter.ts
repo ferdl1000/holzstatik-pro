@@ -39,6 +39,13 @@ export interface OrVisionRequest {
  * Ein Vision-Call über OpenRouter mit mehreren Bildern (Kacheln). Wirft bei Fehler —
  * der Aufrufer fängt das ab und nutzt Gemini.
  */
+/** Zeitbudget je Modell-Versuch. Freie Modelle können bei Überlastung lange hängen —
+ *  ohne Limit würde ein einziger zäher Versuch das ganze 150s-Edge-Fenster sprengen. */
+const PER_MODEL_TIMEOUT_MS = 25_000;
+/** Gesamtbudget für ALLE Kandidaten zusammen — Rest der Zeit bleibt für den
+ *  Gemini-Fallback + restliche Pipeline (Edge-Limit ist 150s). */
+const TOTAL_BUDGET_MS = 70_000;
+
 export async function openRouterVision(req: OrVisionRequest): Promise<string> {
   const key = req.apiKey || Deno.env.get('OPENROUTER_API_KEY');
   if (!key) throw new Error('OPENROUTER_API_KEY nicht gesetzt');
@@ -49,11 +56,19 @@ export async function openRouterVision(req: OrVisionRequest): Promise<string> {
     content.push({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } });
   }
 
+  const overallStart = Date.now();
   let lastError = '';
   for (const model of candidates) {
+    if (Date.now() - overallStart > TOTAL_BUDGET_MS) {
+      lastError = `Zeitbudget erschöpft (${TOTAL_BUDGET_MS}ms) — übrige Kandidaten übersprungen`;
+      break;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PER_MODEL_TIMEOUT_MS);
     try {
       const res = await fetch(OR_URL, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${key}`,
           'Content-Type': 'application/json',
@@ -81,8 +96,12 @@ export async function openRouterVision(req: OrVisionRequest): Promise<string> {
       lastError = `${model} ${res.status}: ${(await res.text()).slice(0, 160)}`;
       if (res.status === 401) throw new Error(`OpenRouter Auth: ${lastError}`);
     } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
+      lastError = (e instanceof Error && e.name === 'AbortError')
+        ? `${model}: Zeitlimit (${PER_MODEL_TIMEOUT_MS}ms) überschritten`
+        : (e instanceof Error ? e.message : String(e));
       if (lastError.includes('Auth')) throw e;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw new Error(`OpenRouter: alle Modelle fehlgeschlagen: ${lastError}`);

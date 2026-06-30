@@ -852,6 +852,7 @@ serve(async (req) => {
     // Gemini-Call (multi-image). WICHTIG: dann wird die große Original-Datei NICHT
     // mehr geladen/base64-kodiert (spart Memory → kein WORKER_RESOURCE_LIMIT bei 9 MB-Plänen).
     let tileImages: { base64: string; mimeType: string }[] = [];
+    const tDownloadStart = Date.now();
     const tilePaths: string[] = Array.isArray(doc.tile_paths) ? doc.tile_paths : [];
     if (tilePaths.length >= 2) {
       for (const tp of tilePaths.slice(0, 6)) {
@@ -862,6 +863,7 @@ serve(async (req) => {
       }
     }
     const useTiles = tileImages.length >= 2;
+    console.log(`[TIMING] Kachel-Download: ${Date.now() - tDownloadStart}ms für ${tileImages.length} Kacheln`);
 
     // Original-Datei nur laden, wenn KEINE Kacheln genutzt werden (Memory sparen).
     let base64 = '';
@@ -907,9 +909,11 @@ Plans in hoher Auflösung. Lies in JEDER Kachel ALLE Beschriftungen, Maße und S
 Führe die Informationen zu EINEM Gesamtergebnis zusammen. Da die Kacheln überlappen,
 zähle gleiche Werte/Bauteile NICHT doppelt. Übersieh nichts — gerade kleine Maß- und
 DN-Zahlen sind jetzt gut lesbar.` : '';
-        // Bildquellen für ein stärkeres freies Modell (OpenRouter/Qwen2.5-VL):
-        // Kacheln, oder das heruntergerechnete JPEG. PDF-Direktinput kann OpenRouter nicht.
-        const orImages = useTiles ? tileImages : (docMime.startsWith('image/') ? [{ base64, mimeType: docMime }] : null);
+        // Bildquellen für ein stärkeres freies Modell (OpenRouter): Kacheln, oder das
+        // heruntergerechnete JPEG. PDF-Direktinput kann OpenRouter nicht.
+        // Auf max. 4 Kacheln begrenzt — freie Modelle sind langsamer als Gemini,
+        // bei 6 vollen Kacheln + Modell-Retry-Kaskade droht das 150s-Edge-Limit.
+        const orImages = useTiles ? tileImages.slice(0, 4) : (docMime.startsWith('image/') ? [{ base64, mimeType: docMime }] : null);
         const orUserPrompt = `Analysiere diesen österreichischen Einreichplan: ${doc.file_name}${useTiles ? ' (in Teilabschnitten geliefert)' : ''}. Liefere das vollständige JSON inkl. _rawText.`;
 
         let text: string;
@@ -917,6 +921,7 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
         // Wenn ein OpenRouter-Key gesetzt ist UND Bilder vorliegen: stärkeres freies
         // Modell zuerst (besseres Plan-Verständnis), Gemini als Fallback.
         if (orImages && (openRouterKey || openRouterAvailable())) {
+          const tOrStart = Date.now();
           try {
             text = await openRouterVision({
               systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
@@ -926,8 +931,10 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
               apiKey: openRouterKey,
             });
             reader = 'openrouter';
+            console.log(`[TIMING] OpenRouter-Call OK: ${Date.now() - tOrStart}ms`);
           } catch (_orErr) {
-            console.error('[agent-document] OpenRouter fehlgeschlagen, falle auf Gemini zurück:', _orErr instanceof Error ? _orErr.message : String(_orErr));
+            console.error(`[TIMING] OpenRouter-Call FEHLER nach ${Date.now() - tOrStart}ms:`, _orErr instanceof Error ? _orErr.message : String(_orErr));
+            const tGemStart = Date.now();
             text = await geminiVision({
               systemPrompt: combinedPrompt + tilePrompt, userPrompt: orUserPrompt,
               ...(useTiles ? { images: tileImages } : { fileBase64: base64, mimeType: docMime }),
@@ -935,6 +942,7 @@ DN-Zahlen sind jetzt gut lesbar.` : '';
               mediaResolution: (useTiles || primaryVisionModel === 'gemini-2.5-pro') ? 'MEDIA_RESOLUTION_HIGH' : 'MEDIA_RESOLUTION_MEDIUM',
               model: primaryVisionModel, apiKey: userApiKey,
             });
+            console.log(`[TIMING] Gemini-Fallback OK: ${Date.now() - tGemStart}ms`);
           }
         } else {
           text = await geminiVision({
