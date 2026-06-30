@@ -304,6 +304,22 @@ const Admin = () => {
               <div className="space-y-4 text-sm">
                 {[
                   {
+                    key: 'OPENROUTER_API_KEY',
+                    title: 'OpenRouter — stärkeres KOSTENLOSES Vision-Modell für die Plananalyse',
+                    desc: 'Aktiviert Qwen2.5-VL (kostenloses Free-Tier-Modell über OpenRouter) als primären Plan-Leser — deutlich besser als Gemini Flash beim Verstehen von Plänen, mit eigener (von Gemini unabhängiger) Kontingent. Fällt bei Fehler automatisch auf Gemini zurück, kein Risiko.',
+                    steps: [
+                      'openrouter.ai öffnen → oben rechts „Sign Up" / „Log In" → am schnellsten mit Google-Account anmelden (kein Passwort nötig).',
+                      'Nach dem Login: Avatar oben rechts anklicken → „Keys" im Menü.',
+                      '„Create Key" klicken → Namen vergeben (z.B. „dachplan-assistent") → „Create".',
+                      'Den angezeigten Key (beginnt mit sk-or-v1-…) kopieren — wird nur EINMAL angezeigt — und unten als Wert für OPENROUTER_API_KEY eintragen.',
+                    ],
+                    links: [
+                      { label: 'OpenRouter Keys-Seite', url: 'https://openrouter.ai/settings/keys' },
+                      { label: 'OpenRouter Free-Modelle', url: 'https://openrouter.ai/models?max_price=0' },
+                    ],
+                    note: 'Kostenlos im Free-Tier (qwen/qwen2.5-vl-72b-instruct:free u.a.). Ohne diesen Key läuft die Analyse weiter über Gemini — bei erschöpfter Gemini-Quota (häufig bei viel genutztem Gratis-Key) ist dieser Key der wichtigste Hebel für bessere Erkennung.',
+                  },
+                  {
                     key: 'OCR_API_KEY',
                     title: 'OCR-Service für Plananalyse',
                     desc: 'Wird verwendet um gescannte PDF-Einreichpläne per OCR zu analysieren (Texterkennung, Maßextraktion, Symbole). Empfohlen: Google Cloud Vision API oder Azure Document Intelligence.',
