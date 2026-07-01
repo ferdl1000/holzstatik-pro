@@ -5,13 +5,15 @@ import { StatusIndicator } from '@/components/shared/StatusIndicator';
 import { CheckCircle, AlertTriangle, XCircle, ArrowRight, ShieldAlert, ShieldCheck, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { runFullValidation, countBySeverity, projectHealthStatus } from '@/lib/validation';
+import { FinalCheckSection } from '@/components/project/FinalCheckSection';
 
 interface ReviewTabProps {
   project: Project;
+  projectId?: string;
   onUpdate?: (updates: Partial<Project>) => void;
 }
 
-export function ReviewTab({ project, onUpdate }: ReviewTabProps) {
+export function ReviewTab({ project, projectId, onUpdate }: ReviewTabProps) {
   const issues = useMemo(() => runFullValidation(project), [project]);
   const counts = countBySeverity(issues);
   const health = projectHealthStatus(issues);
@@ -85,6 +87,8 @@ export function ReviewTab({ project, onUpdate }: ReviewTabProps) {
           </div>
         </div>
       </div>
+
+      <FinalCheckSection project={project} projectId={projectId} onUpdate={onUpdate} />
 
       {/* Blocker section */}
       {counts.red > 0 && (
