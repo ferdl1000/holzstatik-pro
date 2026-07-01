@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { RoofVisualization } from './RoofVisualization';
 import type { BuildingGeometry, NumberWithConfidence } from '@/types/project';
 import { captureCorrection } from '@/lib/learning/captureCorrection';
+import { RecalculateAllButton } from './RecalculateAllButton';
 
 interface GeometryTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -87,6 +88,9 @@ export function GeometryTab({ project, onUpdate }: GeometryTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-end">
+        <RecalculateAllButton project={project} onUpdate={onUpdate} />
+      </div>
       {!geo && (
         <div className="rounded-lg border-2 border-[hsl(var(--status-yellow)/0.5)] bg-[hsl(var(--status-yellow-bg))] p-4 flex items-start gap-3">
           <AlertTriangle className="h-4 w-4 text-[hsl(var(--status-yellow))] shrink-0 mt-0.5" />

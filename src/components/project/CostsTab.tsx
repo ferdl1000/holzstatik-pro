@@ -10,10 +10,11 @@ import { Euro, Download, Save, FileSpreadsheet } from 'lucide-react';
 import { estimateCost, exportEstimateAsCSV, DEFAULT_PRICES, DEFAULT_FACTORS, type PricingFactors, type CostPosition, type PositionPriceOverride } from '@/lib/pricing';
 import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { useToast } from '@/hooks/use-toast';
+import { RecalculateAllButton } from './RecalculateAllButton';
 
-interface CostsTabProps { project: Project; }
+interface CostsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
-export function CostsTab({ project }: CostsTabProps) {
+export function CostsTab({ project, onUpdate }: CostsTabProps) {
   const [factors, setFactors] = useState<PricingFactors>(DEFAULT_FACTORS);
   const [coveringId, setCoveringId] = useState('tile_clay');
   const [insulationId, setInsulationId] = useState('ins_mw_200');
@@ -73,13 +74,16 @@ export function CostsTab({ project }: CostsTabProps) {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Euro className="h-5 w-5 text-primary" />
-            Kostenschätzung
-            <InfoTooltip title="Kostenschätzung">
-              <p>Automatische Schätzung basierend auf Holzvolumen, Dach-/Grundfläche und Standardpreisen. Pro Position kannst du Preise überschreiben (Spalte "EP"). Faktoren wie Verschnitt oder Lohnaufschlag rechts justierbar.</p>
-            </InfoTooltip>
-          </CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2">
+              <Euro className="h-5 w-5 text-primary" />
+              Kostenschätzung
+              <InfoTooltip title="Kostenschätzung">
+                <p>Automatische Schätzung basierend auf Holzvolumen, Dach-/Grundfläche und Standardpreisen. Pro Position kannst du Preise überschreiben (Spalte "EP"). Faktoren wie Verschnitt oder Lohnaufschlag rechts justierbar.</p>
+              </InfoTooltip>
+            </CardTitle>
+            <RecalculateAllButton project={project} onUpdate={onUpdate} label="Angebot neu berechnen" />
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs">

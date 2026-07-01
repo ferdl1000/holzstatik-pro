@@ -4,11 +4,13 @@ import { SectionCard } from '@/components/shared/SectionCard';
 import { ConfidenceBadge } from '@/components/shared/ConfidenceBadge';
 import { SourceTag } from '@/components/shared/SourceTag';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
-import { MapPin, Check, X, Edit, Navigation, Save } from 'lucide-react';
+import { MapPin, Check, X, Edit, Navigation, Save, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
+import { useRecalculateAll } from '@/lib/auto/useRecalculateAll';
+import { RecalculateAllButton } from '@/components/project/RecalculateAllButton';
 
 interface AddressTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -17,6 +19,7 @@ export function AddressTab({ project, onUpdate }: AddressTabProps) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(addr || { street: '', houseNumber: '', postalCode: '', city: '', state: '', country: 'Österreich', confidence: 0, source: 'user_entered' as const, alternatives: [] });
   const { toast } = useToast();
+  const { recalculate, running } = useRecalculateAll(project, onUpdate);
 
   if (!addr && !editing) {
     return (
@@ -44,13 +47,18 @@ export function AddressTab({ project, onUpdate }: AddressTabProps) {
     toast({ title: 'Adresse gespeichert' });
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (onUpdate && addr) {
-      onUpdate({
+      await onUpdate({
         address: { ...addr, source: 'user_confirmed', confidence: 1.0 },
       });
     }
-    toast({ title: 'Adresse bestätigt' });
+    toast({ title: 'Adresse bestätigt', description: 'Statik + Angebot werden jetzt automatisch berechnet…' });
+    // Adresse ist der letzte Baustein, den die Pipeline für eine erste Vorbemessung
+    // braucht (Plan liefert Geometrie/Dachform, Adresse liefert Schnee-/Windzone) —
+    // deshalb hier direkt den ersten vollständigen Durchlauf anstoßen statt zu warten,
+    // bis der Nutzer manuell durch alle weiteren Reiter klickt.
+    await recalculate({ silentSuccessTitle: 'Erster Entwurf berechnet' });
   };
 
   const display = editing ? form : (addr || form);
@@ -144,9 +152,13 @@ export function AddressTab({ project, onUpdate }: AddressTabProps) {
                     <Edit className="h-3.5 w-3.5" />Adresse bearbeiten
                   </Button>
                   {addr?.source !== 'user_confirmed' && (
-                    <Button size="sm" className="gap-1.5" onClick={handleConfirm}>
-                      <Check className="h-3.5 w-3.5" />Adresse bestätigen
+                    <Button size="sm" className="gap-1.5" onClick={handleConfirm} disabled={running}>
+                      {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      {running ? 'Berechnet Statik + Angebot…' : 'Adresse bestätigen'}
                     </Button>
+                  )}
+                  {addr?.source === 'user_confirmed' && (
+                    <RecalculateAllButton project={project} onUpdate={onUpdate} label="Statik + Angebot neu berechnen" />
                   )}
                 </>
               )}

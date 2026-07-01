@@ -228,7 +228,9 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     source: 'auto_extracted' as const,
     alternatives: [],
   };
-  const loadsResult = await autoComputeLoads(addressForLoads, derivedGeometry.geometry, roofTypeRaw.form, project.coveringType);
+  const loadsResult = await autoComputeLoads(
+    addressForLoads, derivedGeometry.geometry, roofTypeRaw.form, project.coveringType, project.loadCases,
+  );
 
   // g_k: Summe aller permanenten Lastfälle
   const g_k = loadsResult.loadCases
@@ -246,6 +248,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     { gk: g_k, sk: s_k },
     derivedGeometry.geometry,
     sparrenSpacing,
+    structuralSystemRaw.supportSpacing ?? 4.0,
   );
 
   // ── 5b. Modus-abhängige optimizedMembers ─────────────────────────────────

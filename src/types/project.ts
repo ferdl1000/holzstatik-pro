@@ -205,6 +205,9 @@ export interface StructuralSystem {
   reasoning: string;
   alternatives: { type: StructuralSystemType; reasoning: string; confidence: number }[];
   userConfirmed: boolean;
+  /** Abstand der Pfettenstützen in m (Default 4.0). Kleinerer Abstand → kürzere
+   *  Pfettenstützweite → schwächerer Pfettenquerschnitt möglich, dafür mehr Stützen. */
+  supportSpacing?: number;
 }
 
 // ===== Loads =====

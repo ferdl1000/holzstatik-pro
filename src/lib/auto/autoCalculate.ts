@@ -50,12 +50,14 @@ function isGlulamMaterial(material: string): boolean {
 }
 
 /** Gibt die Trägerstützweite in Metern zurück (Fallback auf geometrie-basierte Schätzung). */
-function resolveSpan(member: TimberMember, geometry: BuildingGeometry): number {
+function resolveSpan(member: TimberMember, geometry: BuildingGeometry, supportSpacing = 4.0): number {
   // Pfetten: member.length ist die Gesamtlänge der Pfette (= Gebäudelänge),
   // NICHT die statische Stützweite. Stützweite = Stützenabstand ≈ Gebäudelänge / Feldanzahl.
+  // supportSpacing ist im Tragwerk-Tab konfigurierbar (Default 4.0 m) — ein kleinerer
+  // Abstand verkürzt die Pfettenstützweite und erlaubt einen schwächeren Querschnitt.
   if (member.type === 'pfette') {
     const buildingLen = geometry.length?.value ?? 21.8;
-    const numBays = Math.max(1, Math.ceil(buildingLen / 4.0));
+    const numBays = Math.max(1, Math.ceil(buildingLen / supportSpacing));
     return +(buildingLen / numBays).toFixed(2);
   }
   if (member.length > 0) return member.length;
@@ -129,6 +131,7 @@ export function autoCalculateAllMembers(
   loads: { gk: number; sk: number },
   geometry: BuildingGeometry,
   sparrenSpacing: number,
+  supportSpacing = 4.0,
 ): AutoCalculationResult {
   const assumptions: AutoAssumption[] = [];
   const resultMembers: MemberCalcEntry[] = [];
@@ -161,7 +164,7 @@ export function autoCalculateAllMembers(
 
   for (const member of members) {
     try {
-      const span = resolveSpan(member, geometry);
+      const span = resolveSpan(member, geometry, supportSpacing);
       const useGlulam = isGlulamMaterial(member.material) || member.type === 'leimbinder';
       const timberClass = parseTimberClass(member.material, useGlulam);
 

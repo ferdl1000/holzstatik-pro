@@ -37,11 +37,48 @@ const COVERING_WEIGHT: Record<RoofCovering['type'], number> = {
   unbekannt:      0.55,
 };
 
+/**
+ * Übernimmt vom Nutzer bestätigte Werte (userModified=true) in die frisch berechneten
+ * Lastfälle. Nur für die 3 physikalisch eindeutig überlappenden Kategorien (Eigengewicht,
+ * Schnee, Wind-Druck) — ein bestätigter Wert im Lasten-Tab darf durch einen erneuten
+ * Pipeline-Lauf NICHT stillschweigend verworfen werden.
+ */
+function applyUserConfirmedLoads(computed: LoadCase[], existing: LoadCase[] | undefined): LoadCase[] {
+  if (!existing || existing.length === 0) return computed;
+
+  const confirmedByType = new Map<string, LoadCase>();
+  for (const lc of existing) {
+    if (!lc.userModified) continue;
+    // 'wind' im manuellen Tab meint immer den Druck-Lastfall — nicht mit dem
+    // separat berechneten Sog-Lastfall verwechseln.
+    if (lc.type === 'permanent' || lc.type === 'snow' || lc.type === 'wind') {
+      if (!confirmedByType.has(lc.type)) confirmedByType.set(lc.type, lc);
+    }
+  }
+  if (confirmedByType.size === 0) return computed;
+
+  let windDruckHandled = false;
+  return computed.map((lc) => {
+    if (lc.type === 'wind' && lc.value < 0) return lc; // Sog nie mit Druck-Bestätigung überschreiben
+    const isWindDruck = lc.type === 'wind' && !windDruckHandled;
+    const confirmed = confirmedByType.get(lc.type);
+    if (!confirmed || (lc.type === 'wind' && !isWindDruck)) return lc;
+    if (lc.type === 'wind') windDruckHandled = true;
+    return {
+      ...lc,
+      value: confirmed.value,
+      userModified: true,
+      source: `${lc.source} — vom Nutzer bestätigt/angepasst auf ${confirmed.value} ${confirmed.unit} (Original-Berechnung: ${lc.value} ${lc.unit})`,
+    };
+  });
+}
+
 export function autoComputeLoads(
   address: ExtractedAddress | undefined,
   geometry: BuildingGeometry,
   roofForm: 'satteldach' | 'pultdach' | 'walmdach' | 'flachdach' | 'krueppelwalmdach' | 'mischform',
   coveringType?: RoofCovering,
+  existingLoadCases?: LoadCase[],
 ): AutoLoadsResult {
   const assumptions: AutoAssumption[] = [];
 
@@ -329,8 +366,18 @@ export function autoComputeLoads(
     });
   }
 
+  const finalLoadCases = applyUserConfirmedLoads(loadCases, existingLoadCases);
+  if (finalLoadCases !== loadCases) {
+    assumptions.push({
+      field: 'loadCases.userConfirmed',
+      value: 'übernommen',
+      reason: 'Im Lasten-Tab bestätigte Werte (Eigengewicht/Schnee/Wind) wurden übernommen statt neu berechnet.',
+      source: 'derived',
+    });
+  }
+
   return {
-    loadCases,
+    loadCases: finalLoadCases,
     assumptions,
     snowZone,
     windZone,

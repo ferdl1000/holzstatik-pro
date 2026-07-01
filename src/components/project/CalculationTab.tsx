@@ -8,6 +8,7 @@ import { Calculator, Play, AlertTriangle, CheckCircle, XCircle, Loader2, ShieldA
 import { cn } from '@/lib/utils';
 import { calculateAllMembers, checkCalculationPrerequisites } from '@/lib/calculations';
 import { useToast } from '@/hooks/use-toast';
+import { RecalculateAllButton } from './RecalculateAllButton';
 
 interface CalculationTabProps {
   project: Project;
@@ -101,13 +102,16 @@ export function CalculationTab({ project, onUpdate }: CalculationTabProps) {
             Vorbemessung nach EC5 / ÖNORM B 1995-1-1
           </p>
         </div>
-        <Button className="gap-1.5" onClick={handleCalculate} disabled={calculating || prereqBlockers.length > 0}>
-          {calculating ? (
-            <><Loader2 className="h-4 w-4 animate-spin" />Berechne…</>
-          ) : (
-            <><Play className="h-4 w-4" />Berechnung starten</>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <RecalculateAllButton project={project} onUpdate={onUpdate} label="Bauteile neu dimensionieren" />
+          <Button className="gap-1.5" onClick={handleCalculate} disabled={calculating || prereqBlockers.length > 0}>
+            {calculating ? (
+              <><Loader2 className="h-4 w-4 animate-spin" />Berechne…</>
+            ) : (
+              <><Play className="h-4 w-4" />Berechnung starten</>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Prerequisite blockers */}

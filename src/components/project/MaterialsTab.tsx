@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { TreePine, Edit, Plus, Save, Trash2, RefreshCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { recalcWithTimber, availableTimberOptions } from '@/lib/auto/recalcTimber';
+import { RecalculateAllButton } from './RecalculateAllButton';
 
 interface MaterialsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -71,6 +72,9 @@ export function MaterialsTab({ project, onUpdate }: MaterialsTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-end">
+        <RecalculateAllButton project={project} onUpdate={onUpdate} label="Alles neu berechnen (Bauteile + Lasten + Angebot)" />
+      </div>
       {/* Holzart nachträglich ändern → automatische Neuberechnung */}
       <SectionCard
         title="Holzart ändern & neu berechnen"

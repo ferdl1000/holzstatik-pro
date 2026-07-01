@@ -4,7 +4,7 @@ import { SectionCard } from '@/components/shared/SectionCard';
 import { ConfidenceBadge } from '@/components/shared/ConfidenceBadge';
 import { ROOF_FORM_LABELS, STRUCTURAL_SYSTEM_LABELS } from '@/types/project';
 import { Button } from '@/components/ui/button';
-import { Check, Building2, ArrowRight, TriangleAlert, Plus, AlertTriangle } from 'lucide-react';
+import { Check, Building2, ArrowRight, TriangleAlert, Plus, AlertTriangle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { RoofVisualization } from './RoofVisualization';
@@ -14,6 +14,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { captureCorrection } from '@/lib/learning/captureCorrection';
+import { RecalculateAllButton } from './RecalculateAllButton';
+import { useRecalculateAll } from '@/lib/auto/useRecalculateAll';
 
 interface StructureTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -34,6 +36,8 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
     name: '', type: 'sparren', material: project.materials[0]?.id || '',
     width: 80, height: 200, length: 5, quantity: 1, crossSection: '80/200',
   });
+  const [supportSpacing, setSupportSpacing] = useState(sys?.supportSpacing ?? 4.0);
+  const { recalculate, running: recalculating } = useRecalculateAll(project, onUpdate);
 
   const hasGeometry = project.geometry && project.geometry.width.value > 0;
 
@@ -122,6 +126,9 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-end">
+        <RecalculateAllButton project={project} onUpdate={onUpdate} />
+      </div>
       {/* No geometry warning */}
       {!hasGeometry && (
         <div className="rounded-lg border-2 border-[hsl(var(--status-red)/0.5)] bg-[hsl(var(--status-red-bg))] p-4 flex items-start gap-3">
@@ -246,6 +253,46 @@ export function StructureTab({ project, onUpdate }: StructureTabProps) {
           </div>
         )}
       </SectionCard>
+
+      {/* Stützen-Konfiguration: reduziert Pfettendimensionierung durch engere Unterstützung */}
+      {sys && (sys.type === 'pfettendach' || sys.type === 'pfettendach_mittelpfette' || sys.type === 'sonderfall') && (
+        <SectionCard
+          title="Stützenabstand unter Pfetten"
+          subtitle="Zusätzliche Stützen verkürzen die Pfettenstützweite — kleinerer Abstand = mehr Stützen = schwächerer, günstigerer Pfettenquerschnitt möglich"
+        >
+          <div className="flex items-end gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Stützenabstand (m)</Label>
+              <Input
+                type="number" step="0.5" min="1.5" max="8"
+                value={supportSpacing}
+                onChange={(e) => setSupportSpacing(parseFloat(e.target.value) || 4.0)}
+                className="w-32 input-technical"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground max-w-md pb-2">
+              Standard: 4.0 m. Beispiel: bei 4 Feldern statt 2 (Abstand 2 m statt 4 m) sinkt die
+              Pfettenstützweite auf die Hälfte — für einen Sattel-/Pultdach-Steher „mittig" 1
+              Zwischenstütze reicht meist ein Abstand ≈ Gebäudelänge/2.
+            </p>
+            <Button
+              size="sm" className="gap-1.5"
+              disabled={recalculating || supportSpacing === (sys.supportSpacing ?? 4.0)}
+              onClick={async () => {
+                const updatedSys = { ...sys, supportSpacing };
+                if (onUpdate) await onUpdate({ structuralSystem: updatedSys });
+                await recalculate({
+                  projectOverride: { ...project, structuralSystem: updatedSys },
+                  silentSuccessTitle: 'Stützenabstand angewandt — neu dimensioniert',
+                });
+              }}
+            >
+              {recalculating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Übernehmen & neu berechnen
+            </Button>
+          </div>
+        </SectionCard>
+      )}
 
       {/* Members with volume */}
       <SectionCard title="Bauteile" subtitle="Tragwerksbauteile mit Mengenansatz"

@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Edit, Save, Snowflake, Wind, Weight, ArrowDown, Check, RefreshCw, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { calculateSnowLoad, calculateWindPressure } from '@/lib/calculations';
+import { RecalculateAllButton } from './RecalculateAllButton';
+import { useRecalculateAll } from '@/lib/auto/useRecalculateAll';
 
 interface LoadsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -35,6 +37,7 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
     project.address?.elevation?.toString() || ''
   );
   const { toast } = useToast();
+  const { recalculate, running: recalculating } = useRecalculateAll(project, onUpdate);
 
   const addressConfirmed = project.address?.source === 'user_confirmed' || project.address?.source === 'user_entered';
   const hasGeometry = project.geometry && project.geometry.roofPitch.value > 0 && project.geometry.eavesHeight.value > 0;
@@ -113,6 +116,9 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-end">
+        <RecalculateAllButton project={project} onUpdate={onUpdate} label="Statik + Angebot neu berechnen" />
+      </div>
       {/* Blockers banner */}
       {blockers.length > 0 && (
         <div className="rounded-lg border-2 border-[hsl(var(--status-red)/0.5)] bg-[hsl(var(--status-red-bg))] p-4">
@@ -255,11 +261,19 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
                 <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setEditing(true)}>
                   <Edit className="h-3.5 w-3.5" />Werte manuell bearbeiten
                 </Button>
-                <Button size="sm" className="gap-1.5" onClick={() => {
-                  if (onUpdate) onUpdate({ loadCases: project.loadCases.map(lc => ({ ...lc, userModified: true })) });
-                  toast({ title: 'Alle Lasten bestätigt' });
+                <Button size="sm" className="gap-1.5" disabled={recalculating} onClick={async () => {
+                  const confirmedLoadCases = project.loadCases.map(lc => ({ ...lc, userModified: true }));
+                  if (onUpdate) await onUpdate({ loadCases: confirmedLoadCases });
+                  toast({ title: 'Alle Lasten bestätigt', description: 'Bauteile werden mit diesen Werten neu dimensioniert…' });
+                  // Sofort neu rechnen mit den GERADE bestätigten Lasten (nicht erst nach dem
+                  // nächsten Render warten) — sonst würde die Pipeline noch die alten Werte sehen.
+                  await recalculate({
+                    projectOverride: { ...project, loadCases: confirmedLoadCases },
+                    silentSuccessTitle: 'Bauteile neu dimensioniert',
+                  });
                 }}>
-                  <Check className="h-3.5 w-3.5" />Alle Lasten bestätigen
+                  {recalculating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Alle Lasten bestätigen & neu berechnen
                 </Button>
               </>
             )}

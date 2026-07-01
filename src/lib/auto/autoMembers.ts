@@ -385,8 +385,9 @@ export function autoGenerateMembers(
       });
     }
 
-    // Stützen alle 4 m unter First- und ggf. Mittelpfette
-    const stuetzenAbstand = 4.0;
+    // Stützen unter First- und ggf. Mittelpfette — Abstand nachträglich im
+    // Tragwerk-Tab konfigurierbar (kleinerer Abstand → kürzere Pfettenstützweite).
+    const stuetzenAbstand = structuralSystem.supportSpacing ?? 4.0;
     const stuetzenAnzahlFirst = Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1);
     const stuetzenHoehe = +(ridgeH / 2 - 2.5).toFixed(2); // vereinfacht: halbe Gebäudehöhe - Deckenebene
 
@@ -587,7 +588,7 @@ export function autoGenerateMembers(
   const stuetzen = members.filter(m => m.type === 'stuetze');
   const stuetzPositions: number[] = [];
   if (stuetzen.length > 0) {
-    const stuetzenAbstand = 4.0;
+    const stuetzenAbstand = structuralSystem.supportSpacing ?? 4.0;
     const stuetzenAnz = Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1);
     for (let i = 1; i <= stuetzenAnz; i++) {
       stuetzPositions.push(+(i * stuetzenAbstand).toFixed(2));
