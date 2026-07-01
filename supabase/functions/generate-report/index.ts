@@ -1,11 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { geminiText, CORS_HEADERS } from "../_shared/gemini.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+const corsHeaders = CORS_HEADERS;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -18,10 +15,17 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY nicht konfiguriert");
-
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // Denselben Gemini-Key wie alle anderen Agenten nutzen (Admin: GOOGLE_AI_API_KEY,
+    // Fallback GEMINI_API_KEY) — kein separater/bezahlter Lovable-Gateway-Key mehr nötig.
+    let geminiApiKey: string | undefined;
+    try {
+      const { data: ks } = await supabase.from("system_settings").select("key,value")
+        .in("key", ["GOOGLE_AI_API_KEY", "GEMINI_API_KEY"]);
+      const found = (ks || []).find((r: any) => typeof r.value === "string" && r.value.trim().length > 20);
+      if (found) geminiApiKey = found.value.trim();
+    } catch { /* Env-Secret-Fallback in geminiText() */ }
 
     const { data: project, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
     if (error || !project) throw new Error("Projekt nicht gefunden");
@@ -45,27 +49,21 @@ Regeln: Automatische Werte mit [AUTO], bestätigte mit [BESTÄTIGT], unbestätig
 Ampel-Farbcodes: Rot=#ef4444, Gelb=#f59e0b, Grün=#22c55e.
 Am Ende: „Diese Vorbemessung ersetzt keine rechtsverbindliche statische Berechnung durch eine qualifizierte Fachperson."`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Erstelle: ${title}\n\n${dataPrompt}` },
-        ],
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      const s = aiResponse.status;
-      if (s === 429) return new Response(JSON.stringify({ error: "Rate-Limit. Bitte später erneut versuchen." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (s === 402) return new Response(JSON.stringify({ error: "KI-Guthaben aufgebraucht." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      throw new Error(`KI-Fehler: ${s}`);
+    let htmlContent: string;
+    try {
+      htmlContent = await geminiText({
+        systemPrompt, userPrompt: `Erstelle: ${title}\n\n${dataPrompt}`,
+        apiKey: geminiApiKey, temperature: 0.3, maxTokens: 8192,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isQuota = msg.includes("429") || /quota/i.test(msg);
+      return new Response(JSON.stringify({
+        error: isQuota
+          ? "Gemini-Tageslimit erreicht. Bitte später erneut versuchen oder eigenen Key im Admin hinterlegen."
+          : `KI-Fehler: ${msg}`,
+      }), { status: isQuota ? 429 : 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
-
-    const aiResult = await aiResponse.json();
-    const htmlContent = aiResult.choices?.[0]?.message?.content || "";
     const htmlMatch = htmlContent.match(/```(?:html)?\s*([\s\S]*?)```/);
     const cleanHtml = htmlMatch ? htmlMatch[1].trim() : htmlContent;
 
