@@ -92,6 +92,8 @@ export interface Project {
   sparrenSpacing?: number;
   /** Im Plan beschriftete Holzquerschnitte (z.B. "Sparren 8/16") — Start-Querschnitte für die Bemessung */
   planMemberSections?: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
+  /** Dachüberstand in m (aus Plan gelesen oder Default 0,4) — geht in Dachfläche + Sparrenlänge ein */
+  roofOverhang?: number;
 }
 
 // ===== Documents =====

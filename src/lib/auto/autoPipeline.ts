@@ -68,6 +68,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   // von Aufrufern mitgegebenen Default (0,8 m).
   const sparrenSpacing = project.sparrenSpacing ?? input.sparrenSpacing ?? 0.8;
   const planSections = project.planMemberSections;
+  const roofOverhang = project.roofOverhang;
   const ceilings = input.ceilings ?? project.ceilings;
 
   // ── 0. Pre-Validation: DN-Marker + Plausibilitätsprüfung VOR der Ableitung ──
@@ -189,7 +190,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
         derivedPartGeom.geometry,
         partRoofType,
         partStructSystem,
-        { sparrenSpacing, ceilings, planSections },
+        { sparrenSpacing, ceilings, planSections, roofOverhang },
       );
 
       const prefixedMembers = prefixMemberIds(partMembersResult.members, rp.id);
@@ -214,7 +215,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       derivedGeometry.geometry,
       roofTypeRaw,
       structuralSystemRaw,
-      { sparrenSpacing, ceilings, planSections },
+      { sparrenSpacing, ceilings, planSections, roofOverhang },
     );
   }
 
@@ -280,7 +281,9 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     roofForm: project.roofType?.form ?? 'satteldach',
     includeDeckPlanks: true,
     includeTransport: true,
+    roofOverhang: project.roofOverhang,
     ...(project.coveringType ? { coveringType: project.coveringType } : {}),
+    ...(updatedRoofParts && updatedRoofParts.length > 0 ? { roofParts: updatedRoofParts } : {}),
   });
 
   // ── 6b. Post-Pipeline-Validation: Final-Check der abgeleiteten Geometrie ──

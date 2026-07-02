@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { downloadReport } from '@/lib/report/generator';
 import type { ReportExtras } from '@/lib/report/generator';
 import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
+import { roofAreaWithOverhang } from '@/lib/calc/roofArea';
 import { computeTransportPlan } from '@/lib/auto/standards';
 import { Switch } from '@/components/ui/switch';
 import { StatusIndicator } from '@/components/shared/StatusIndicator';
@@ -48,7 +49,7 @@ export function ReportTab({ project, projectId }: ReportTabProps) {
 
       const baseCosts = includeCosts ? estimateCost({
         members: project.members || [],
-        roofArea: project.geometry ? project.geometry.length.value * (project.geometry.width.value / Math.cos((project.geometry.roofPitch.value * Math.PI) / 180)) : 0,
+        roofArea: project.geometry ? roofAreaWithOverhang(project.geometry.length.value, project.geometry.width.value, project.geometry.roofPitch.value, project.roofOverhang) : 0,
         groundArea: project.geometry ? project.geometry.length.value * project.geometry.width.value : 0,
         coveringId: 'tile_clay', insulationId: 'ins_mw_200',
         membraneIds: ['mem_under', 'mem_vapor'],

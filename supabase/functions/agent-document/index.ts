@@ -42,7 +42,7 @@ Suche auf JEDER Seite nach "DN X°" Beschriftungen (österreichische Norm für D
 
 SUCHE EXPLIZIT NACH:
 - "DN X°" Beschriftungen (Dachneigung) — diese stehen oft 5–10× im Schnitt!
-- "ÜBERDACHUNG", "Vordach", "Tordach", "Carport" Texte (= separate Dachteile)
+- "ÜBERDACHUNG", "Vordach", "Tordach", "Carport", "Flugdach", "Garage", "Terrassendach", "Pergola" Texte (= separate Dachteile). ZÄHLE JEDES DACH EINZELN — auch FREISTEHENDE Nebengebäude (Carport neben dem Haus, eigene Garage, Geräteschuppen) sind eigene Dachteile mit eigener Geometrie. NICHTS auslassen!
 - "Holzboden X m²", "Holzbalkendecke" Texte (= Holzbalkendecken)
 - "Aufbauten" oder "Bauteilbeschreibungen" Legende mit Code + Schichten (B1, B2, D1, D2, W1 ODER reine Ziffern 06, 09, 11 etc.)
 - Maße neben Dachteilen (Firsthöhe, Traufhöhe, Spannweite)
@@ -451,7 +451,7 @@ Liefere auch "dn_markers" im JSON:
 Wenn KEIN DN vorhanden: berechne aus Höhen und label="Dachneigung_berechnet".
 
 === VORDÄCHER — KRITISCH ===
-SUCHE AKTIV nach "ÜBERDACHUNG", "Vordach", "Tordach", "Carport" Texten.
+SUCHE AKTIV nach "ÜBERDACHUNG", "Vordach", "Tordach", "Carport", "Flugdach", "Garage", "Terrassendach", "Pergola" Texten. JEDES Dach zählt einzeln — auch FREISTEHENDE Nebengebäude (Carport, Garage, Schuppen) sind eigene roofParts. NICHTS auslassen!
 Jeder gefundene Text → eigener roofPart kind='vordach'.
 
 === BRANDSCHUTZ-KLASSE & GEBÄUDEKLASSE ===

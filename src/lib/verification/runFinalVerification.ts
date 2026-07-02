@@ -15,6 +15,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { Project } from '@/types/project';
 import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
+import { roofAreaWithOverhang } from '@/lib/calc/roofArea';
 import type { ComputedSummary } from '../../../supabase/functions/_shared/finalVerification';
 
 export type { ComputedSummary } from '../../../supabase/functions/_shared/finalVerification';
@@ -38,7 +39,7 @@ export function buildComputedSummary(project: Project): ComputedSummary {
   const groundArea = project.geometry ? project.geometry.length.value * project.geometry.width.value : 0;
   const pitch = project.geometry?.roofPitch.value ?? 0;
   const roofAreaForCost = groundArea > 0
-    ? Math.round(groundArea / Math.cos((pitch * Math.PI) / 180) * 10) / 10
+    ? Math.round(roofAreaWithOverhang(project.geometry!.length.value, project.geometry!.width.value, pitch, project.roofOverhang) * 10) / 10
     : roofAreaM2;
   const estimate = estimateCost({
     members, roofArea: roofAreaForCost, groundArea,

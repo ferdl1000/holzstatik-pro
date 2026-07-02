@@ -9,6 +9,7 @@ import {
   Boxes, Euro, Sparkles, ShoppingCart, Flame, Wrench,
 } from 'lucide-react';
 import { PlanTab } from '@/components/project/PlanTab';
+import { OverviewTab } from '@/components/project/OverviewTab';
 import { ExtractionTab } from '@/components/project/ExtractionTab';
 import { AddressTab } from '@/components/project/AddressTab';
 import { GeometryTab } from '@/components/project/GeometryTab';
@@ -31,6 +32,7 @@ import { runFullValidation, countBySeverity } from '@/lib/validation';
 import { runAutoPipeline } from '@/lib/auto/autoPipeline';
 
 const TAB_CONFIG = [
+  { key: 'ergebnis', label: 'Ergebnis', icon: Sparkles },
   { key: 'plan', label: 'Plan', icon: FileText },
   { key: 'autoanalysis', label: 'Komplett-Analyse', icon: Sparkles },
   { key: 'bom', label: 'Bestellliste', icon: ShoppingCart },
@@ -52,7 +54,7 @@ const TAB_CONFIG = [
 const ProjectView = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { id } = useParams<{ id: string }>();
-  const activeTab = searchParams.get('tab') || 'plan';
+  const requestedTab = searchParams.get('tab');
   const [project, setProject] = useState<Project>(EMPTY_PROJECT);
   const [dbProject, setDbProject] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -117,6 +119,10 @@ const ProjectView = () => {
       }).eq('id', dbProject.id);
     }
   }, [project, dbProject]);
+
+  // Standard-Ansicht: Ergebnis-Übersicht sobald ein Rechenergebnis existiert,
+  // sonst der Plan-Upload (neues/leeres Projekt).
+  const activeTab = requestedTab || ((project.members?.length ?? 0) > 0 ? 'ergebnis' : 'plan');
 
   // Live validation counts for blocker banner
   const blockerCount = useMemo(() => {
@@ -184,6 +190,9 @@ const ProjectView = () => {
           </div>
 
           <div className="flex-1 overflow-auto">
+            <TabsContent value="ergebnis" className="m-0 h-full">
+              <OverviewTab project={project} onUpdate={updateProject} onNavigate={(t) => setSearchParams({ tab: t })} />
+            </TabsContent>
             <TabsContent value="plan" className="m-0 h-full">
               <PlanTab project={project} projectId={dbProject?.id} onAnalysisComplete={loadProject} />
             </TabsContent>

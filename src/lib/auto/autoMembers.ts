@@ -61,6 +61,8 @@ export function autoGenerateMembers(
     sparrenSpacing?: number; ceilings?: CeilingArea[]; wallConstructions?: WallConstruction[];
     /** Im Plan beschriftete Querschnitte (aus textParser) — Start-Querschnitte statt Defaults */
     planSections?: { member: string; b: number; h: number; raw: string }[];
+    /** Dachüberstand in m (aus Plan oder Default 0,4) — verlängert die Sparren real */
+    roofOverhang?: number;
   },
 ): AutoMembersResult {
   _idCounter = 0; // reset für deterministische IDs
@@ -117,7 +119,20 @@ export function autoGenerateMembers(
   const sparrenLenRaw = isPultdachForm
     ? Math.sqrt(buildingWidth * buildingWidth + (ridgeH - eavesH) * (ridgeH - eavesH))
     : +sparrenLaenge(geometry).toFixed(2);
-  const sparrenLen = +sparrenLenRaw.toFixed(2);
+  // Dachüberstand verlängert jeden Sparren real (Überstand horizontal → Schräge):
+  // Traufseite immer, beim Satteldach zählt der Firstpunkt nicht (dort stößt der Gegensparren).
+  const overhang = opts?.roofOverhang ?? 0.4;
+  const pitchRadOv = ((geometry.roofPitch?.value ?? 30) * Math.PI) / 180;
+  const overhangSlope = overhang / Math.max(Math.cos(pitchRadOv), 0.5);
+  const sparrenLen = +(sparrenLenRaw + overhangSlope * (isPultdachForm ? 2 : 1)).toFixed(2);
+  assumptions.push({
+    field: 'roofOverhang',
+    value: overhang,
+    reason: opts?.roofOverhang != null
+      ? `Dachüberstand ${(overhang * 100).toFixed(0)} cm aus dem Plan gelesen — Sparrenlänge + Dachfläche entsprechend vergrößert.`
+      : `Dachüberstand nicht im Plan beschriftet — Regelwert ${(overhang * 100).toFixed(0)} cm angesetzt (Sparrenlänge + Dachfläche entsprechend vergrößert).`,
+    source: opts?.roofOverhang != null ? 'derived' : 'standard',
+  });
   const sparrenCount = isPultdachForm
     ? sparrenAnzahlPultdach(buildingLength, spacing)
     : sparrenAnzahl(buildingLength, spacing);

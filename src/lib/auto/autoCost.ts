@@ -16,6 +16,7 @@ import type { JointSpec, TransportPlan } from '@/lib/auto/standards';
 import { suggestDeckPlanks, computeTransportPlan } from '@/lib/auto/standards';
 import { estimateCost } from '@/lib/pricing/estimator';
 import { DEFAULT_FACTORS } from '@/lib/pricing/database';
+import { roofAreaWithOverhang, DEFAULT_ROOF_OVERHANG } from '@/lib/calc/roofArea';
 
 /** Mappe RoofCovering.type auf Preislisten-coveringId */
 function coveringTypeToCoveringId(type: RoofCovering['type']): string {
@@ -52,6 +53,8 @@ interface AutoCostOptions {
   includeDeckPlanks?: boolean;
   /** Transport-Plan automatisch dazu rechnen (default true) */
   includeTransport?: boolean;
+  /** Dachüberstand in m (aus Plan gelesen oder Default 0,4) — vergrößert die reale Dachfläche */
+  roofOverhang?: number;
   /** Wand-Konstruktionstypen für Zusatzpositionen (optional) */
   wallConstructions?: WallConstruction[];
   /** Grundfläche pro Geschoss für Holzständerwand-Berechnung (m²) — wird aus geometry abgeleitet wenn nicht angegeben */
@@ -118,12 +121,9 @@ function buildTransportPositions(plan: TransportPlan): CostPosition[] {
   }));
 }
 
-/** Dachfläche (Schräge) aus Grundriss + Neigung */
-function calcRoofArea(geometry: BuildingGeometry): number {
-  const L = geometry.length.value;
-  const W = geometry.width.value;
-  const pitchDeg = geometry.roofPitch.value;
-  return L * (W / Math.cos((pitchDeg * Math.PI) / 180));
+/** Dachfläche (Schräge) aus Grundriss + Neigung, INKL. Dachüberstand */
+function calcRoofArea(geometry: BuildingGeometry, overhang: number = DEFAULT_ROOF_OVERHANG): number {
+  return roofAreaWithOverhang(geometry.length.value, geometry.width.value, geometry.roofPitch.value, overhang);
 }
 
 /** Grundrissfläche */
@@ -379,9 +379,10 @@ export function autoComputeCosts(
 
   // Helper: Verschalung + Transport in eine CostEstimate einfügen
   const hasLeimbinder = members.some(m => m.type === 'leimbinder');
+  const overhang = opts?.roofOverhang ?? DEFAULT_ROOF_OVERHANG;
   const totalRoofArea = roofParts && roofParts.length > 0
-    ? roofParts.reduce((s, p) => s + p.geometry.length * (p.geometry.width / Math.cos((p.geometry.pitch * Math.PI) / 180)), 0)
-    : calcRoofArea(geometry);
+    ? roofParts.reduce((s, p) => s + roofAreaWithOverhang(p.geometry.length, p.geometry.width, p.geometry.pitch, overhang), 0)
+    : calcRoofArea(geometry, overhang);
   const transportPlan = includeTransport ? computeTransportPlan(members) : undefined;
   const plankPositions = includeDeckPlanks ? buildDeckPlankPositions(roofForm, hasLeimbinder, totalRoofArea) : [];
   const transportPositions = transportPlan ? buildTransportPositions(transportPlan) : [];
@@ -425,8 +426,7 @@ export function autoComputeCosts(
         ? part.members
         : members; // fallback: alle Members wenn Dachteil keine eigenen hat
 
-      const pitchRad = (part.geometry.pitch * Math.PI) / 180;
-      const roofArea = part.geometry.length * (part.geometry.width / Math.cos(pitchRad));
+      const roofArea = roofAreaWithOverhang(part.geometry.length, part.geometry.width, part.geometry.pitch, overhang);
       const groundArea = part.geometry.length * part.geometry.width;
 
       const { materialOnly, withLabor, orderList } = computeForMembers(

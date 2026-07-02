@@ -11,6 +11,7 @@ import { estimateCost, exportEstimateAsCSV, DEFAULT_PRICES, DEFAULT_FACTORS, typ
 import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { useToast } from '@/hooks/use-toast';
 import { RecalculateAllButton } from './RecalculateAllButton';
+import { roofAreaWithOverhang, DEFAULT_ROOF_OVERHANG } from '@/lib/calc/roofArea';
 
 interface CostsTabProps { project: Project; onUpdate?: (updates: Partial<Project>) => void; }
 
@@ -23,11 +24,11 @@ export function CostsTab({ project, onUpdate }: CostsTabProps) {
 
   const roofArea = useMemo(() => {
     if (!project.geometry) return 0;
-    const L = project.geometry.length.value;
-    const W = project.geometry.width.value;
-    const pitch = project.geometry.roofPitch.value;
-    return Math.round(L * (W / Math.cos((pitch * Math.PI) / 180)) * 10) / 10;
-  }, [project.geometry]);
+    return Math.round(roofAreaWithOverhang(
+      project.geometry.length.value, project.geometry.width.value,
+      project.geometry.roofPitch.value, project.roofOverhang ?? DEFAULT_ROOF_OVERHANG,
+    ) * 10) / 10;
+  }, [project.geometry, project.roofOverhang]);
 
   const groundArea = useMemo(() => {
     if (!project.geometry) return 0;

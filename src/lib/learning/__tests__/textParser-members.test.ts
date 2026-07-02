@@ -73,3 +73,18 @@ describe('autoGenerateMembers — Plan-Querschnitte schlagen Defaults', () => {
     expect(members.find(m => m.type === 'sparren')?.crossSection).toBe('8/16');
   });
 });
+
+describe('parseDachueberstand + erweiterte Überdachungs-Erkennung', () => {
+  it('liest "Dachüberstand 50 cm" → 0,5 m', async () => {
+    const { parseDachueberstand } = await import('../../../../supabase/functions/_shared/textParser');
+    expect(parseDachueberstand('Dachüberstand 50 cm allseitig')).toBe(0.5);
+    expect(parseDachueberstand('Überstand 0,60 m')).toBe(0.6);
+    expect(parseDachueberstand('kein Überstandtext')).toBeNull();
+    expect(parseDachueberstand('Überstand 500 cm')).toBeNull(); // unplausibel
+  });
+  it('erkennt Flugdach/Garage/Terrassendach/Pergola als eigene Dächer', async () => {
+    const { parseUeberdachung } = await import('../../../../supabase/functions/_shared/textParser');
+    const r = parseUeberdachung('CARPORT neu, Flugdach über Eingang, Terrassenüberdachung Süd, Garagendach flach, Pergola Ost');
+    expect(r.count).toBeGreaterThanOrEqual(5);
+  });
+});

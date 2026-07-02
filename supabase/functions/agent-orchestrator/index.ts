@@ -566,6 +566,10 @@ serve(async (req) => {
       projectUpdate.planMemberSections = facts.memberSections;
       log.push(`✓ Querschnitte aus Plan gelesen: ${facts.memberSections.map((s: any) => `${s.member} ${s.b}/${s.h}`).join(', ')}`);
     }
+    if (typeof facts.roofOverhang === 'number' && facts.roofOverhang > 0) {
+      projectUpdate.roofOverhang = facts.roofOverhang;
+      log.push(`✓ Dachüberstand aus Plan gelesen: ${(facts.roofOverhang * 100).toFixed(0)} cm`);
+    }
     const factDnMarkers: Array<{ value: number }> = facts.dnMarkers ?? [];
     const dimsArr = (extracted.dimensions || []) as Array<{ label?: string; value: number }>;
     const findDim = (l: string) => dimsArr.find((d) => d.label?.toLowerCase().includes(l))?.value ?? 0;

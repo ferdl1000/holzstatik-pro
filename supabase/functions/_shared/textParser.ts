@@ -23,6 +23,8 @@ export interface ParsedFacts {
   structureHints: string[];
   /** Sparrenabstand in m, direkt aus dem Plan gelesen (z.B. "e = 80 cm") — null wenn nicht angegeben */
   sparrenSpacing: number | null;
+  /** Dachüberstand in m (z.B. "Dachüberstand 50 cm", "Vordach 0,60 m Überstand") — null wenn nicht angegeben */
+  roofOverhang: number | null;
   /** Im Plan beschriftete Holzquerschnitte je Bauteiltyp, z.B. "Sparren 8/16" → {member:'sparren', b:80, h:160} */
   memberSections: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
 }
@@ -169,7 +171,12 @@ export function parseUeberdachung(text: string): { count: number; labels: string
     /VORDACHKANTE[- ]?(?:SATTELDACH|FLACHDACH|PULTDACH)?/gi,
     /\bVordach\b[^\n]{0,20}/gi,
     /\bTordach\b/gi,
-    /\bCarport\b/gi,
+    /\bCarport\b[^\n]{0,20}/gi,
+    /\bFlugdach\b[^\n]{0,20}/gi,
+    /\bSchleppdach\b[^\n]{0,20}/gi,
+    /Terrassen(?:über)?dach(?:ung)?[^\n]{0,20}/gi,
+    /Garagen?dach[^\n]{0,20}/gi,
+    /\bPergola\b[^\n]{0,20}/gi,
   ];
   for (const re of patterns) {
     let m: RegExpExecArray | null;
@@ -344,6 +351,29 @@ export function parseMemberSections(text: string): ParsedFacts['memberSections']
   return out;
 }
 
+/**
+ * Dachüberstand aus dem Plan lesen: "Dachüberstand 50 cm", "Überstand 0,60 m",
+ * "DÜ = 40". Plausibles Band 15–150 cm. Wichtig für die ECHTE Dachfläche —
+ * ohne Überstand wird die Fläche (und damit das Angebot) ~10 % zu klein.
+ */
+export function parseDachueberstand(text: string): number | null {
+  const re = /(?:dach)?überstand\s*[:=]?\s*(\d{1,3}(?:[.,]\d+)?)\s*(cm|m)?|\bDÜ\s*=?\s*(\d{1,3}(?:[.,]\d+)?)\s*(cm|m)?/gi;
+  const candidates: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const v = num(m[1] ?? m[3]);
+    const unit = (m[2] ?? m[4])?.toLowerCase();
+    let cm = v;
+    if (unit === 'm' || (!unit && v < 2)) cm = v * 100;
+    if (cm >= 15 && cm <= 150) candidates.push(cm);
+  }
+  if (candidates.length === 0) return null;
+  const counts = new Map<number, number>();
+  candidates.forEach((c) => counts.set(c, (counts.get(c) ?? 0) + 1));
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  return Math.round((best / 100) * 1000) / 1000;
+}
+
 export function parseAllFacts(text: string): ParsedFacts {
   const ueber = parseUeberdachung(text);
   return {
@@ -360,5 +390,6 @@ export function parseAllFacts(text: string): ParsedFacts {
     structureHints: parseStructure(text),
     sparrenSpacing: parseSparrenabstand(text),
     memberSections: parseMemberSections(text),
+    roofOverhang: parseDachueberstand(text),
   };
 }
