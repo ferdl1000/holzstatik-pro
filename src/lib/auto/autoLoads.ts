@@ -22,7 +22,7 @@ function makeId(prefix: string): string {
 }
 
 /** Eigengewicht der Eindeckung pro Typ (kN/m²) – Deckung + Lattung ohne Tragwerk */
-const COVERING_WEIGHT: Record<RoofCovering['type'], number> = {
+export const COVERING_WEIGHT: Record<RoofCovering['type'], number> = {
   tile_clay:      0.55,
   tile_concrete:  0.55,
   metal_falz:     0.12,
@@ -71,6 +71,38 @@ function applyUserConfirmedLoads(computed: LoadCase[], existing: LoadCase[] | un
       source: `${lc.source} — vom Nutzer bestätigt/angepasst auf ${confirmed.value} ${confirmed.unit} (Original-Berechnung: ${lc.value} ${lc.unit})`,
     };
   });
+}
+
+/**
+ * Eigengewicht des Dachaufbaus aus der ERKANNTEN Eindeckung — dieselbe Rechnung
+ * wie in der Auto-Pipeline, damit der Lasten-Tab nicht stur 0,85 kN/m²
+ * (Ziegel-Annahme) ansetzt, wenn der Plan z.B. Trapezblech zeigt.
+ */
+export function deadLoadForCovering(coveringType?: RoofCovering): { gk: number; source: string; confidence: number } {
+  const STRUCTURE_WEIGHT = 0.15;
+  if (coveringType && coveringType.type !== 'unbekannt') {
+    const coveringWeight = COVERING_WEIGHT[coveringType.type];
+    const base = calculateDeadLoad({
+      layers: [
+        { layerId: 'unterspannbahn' },
+        { layerId: 'mineralwolle_200' },
+        { layerId: 'dampfbremse' },
+        { layerId: 'gk_12_5' },
+      ],
+    });
+    const gk = +(coveringWeight + STRUCTURE_WEIGHT + base.gk).toFixed(2);
+    return {
+      gk,
+      source: `ÖNORM B 1991-1-1: Eindeckung ${coveringType.type} (${coveringWeight.toFixed(2)}) + Tragwerk (${STRUCTURE_WEIGHT.toFixed(2)}) + Ausbau (${base.gk.toFixed(2)}) kN/m² — aus Plan erkannt`,
+      confidence: Math.max(0.6, coveringType.confidence),
+    };
+  }
+  const def = calculateDeadLoad(DEFAULT_TILED_ROOF);
+  return {
+    gk: +def.gk.toFixed(2),
+    source: 'Standardannahme Ziegeldeckung + Lattung (keine Eindeckung aus Plan erkannt) — bitte prüfen',
+    confidence: 0.5,
+  };
 }
 
 export function autoComputeLoads(

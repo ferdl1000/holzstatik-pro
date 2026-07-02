@@ -6,6 +6,8 @@
  */
 
 import type { TimberMember, MaterialProfile, LoadCase, CalculationResult, StructuralCheck, StatusLevel } from '@/types/project';
+import { characteristicGroundSnow, shapeFactor, type SnowZone } from '@/lib/calc/loads/snow';
+import { calculateWindLoad, type WindZone, type TerrainCategory } from '@/lib/calc/loads/wind';
 
 // === Eurocode Teilsicherheitsbeiwerte (normativ, keine Projektdaten) ===
 const GAMMA_M = 1.3;
@@ -255,21 +257,18 @@ export function calculateAllMembers(
 
 // === Austrian Snow Load – ÖNORM B 1991-1-3 ===
 // STRICT: zone parameter must be provided explicitly. No defaults.
+// Delegiert an die EINZIGE s_k-Quelle in calc/loads/snow.ts — Lasten-Tab und
+// Auto-Pipeline müssen für denselben Ort denselben Wert liefern.
 
 export function calculateSnowLoad(
   zone: string,
   altitude: number,
   roofPitch: number
 ): { sk: number; si: number; mu: number } | null {
-  const sk0Map: Record<string, number> = { '1': 1.00, '2': 1.60, '3': 2.30, '4': 3.40 };
-  const sk0 = sk0Map[zone];
-  if (sk0 === undefined) return null; // Zone ungültig → Blocker
+  if (!['1', '2', '3', '4'].includes(zone)) return null; // Zone ungültig → Blocker
 
-  const sk = sk0 * (1 + (altitude / 728) ** 2);
-  let mu: number;
-  if (roofPitch <= 30) mu = 0.8;
-  else if (roofPitch <= 60) mu = 0.8 * (60 - roofPitch) / 30;
-  else mu = 0;
+  const sk = characteristicGroundSnow(zone as SnowZone, altitude);
+  const mu = shapeFactor(roofPitch, 'satteldach');
   const si = mu * sk;
 
   return {
@@ -281,29 +280,24 @@ export function calculateSnowLoad(
 
 // === Wind Load – ÖNORM B 1991-1-4 ===
 // STRICT: zone & terrain must be provided explicitly.
+// Delegiert an calc/loads/wind.ts (v_b-Zonenwerte 17,6–28,3 m/s laut ÖNORM,
+// vorher standen hier abweichende 25–30 m/s → zu hohe Windlasten).
 
 export function calculateWindPressure(
   zone: string,
   terrainCategory: string,
   height: number
 ): { qp: number; vb0: number } | null {
-  const vb0Map: Record<string, number> = { '1': 25.0, '2': 27.3, '3': 30.0 };
-  const vb0 = vb0Map[zone];
-  if (vb0 === undefined) return null;
+  if (!['1', '2', '3', '4'].includes(zone)) return null;
+  if (!['0', 'I', 'II', 'III', 'IV'].includes(terrainCategory)) return null;
 
-  const terrainParams: Record<string, { kr: number; z0: number }> = {
-    'I': { kr: 0.17, z0: 0.01 }, 'II': { kr: 0.19, z0: 0.05 },
-    'III': { kr: 0.22, z0: 0.30 }, 'IV': { kr: 0.24, z0: 1.00 },
-  };
-  const terrain = terrainParams[terrainCategory];
-  if (!terrain) return null;
+  const result = calculateWindLoad({
+    zone: zone as WindZone,
+    terrain: terrainCategory as TerrainCategory,
+    buildingHeight: height,
+    roofPitch: 30,
+    roofForm: 'satteldach',
+  });
 
-  const { kr, z0 } = terrain;
-  const zMin = Math.max(height, z0 * 10);
-  const cr = kr * Math.log(zMin / z0);
-  const qb = 0.5 * 1.25 * vb0 * vb0 / 1000;
-  const ce = cr * cr * (1 + 7 / (cr * Math.log(zMin / z0)));
-  const qp = ce * qb;
-
-  return { qp: Math.round(qp * 100) / 100, vb0 };
+  return { qp: Math.round(result.qp * 100) / 100, vb0: result.vb };
 }

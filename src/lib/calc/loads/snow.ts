@@ -41,26 +41,23 @@ export interface SnowLoadResult {
 
 /**
  * Charakteristische Bodenschneelast s_k(A) nach ÖNORM B 1991-1-3 Anhang B.
- * A = Seehöhe in m. Formel je Zone:
+ * Offizielle Österreich-Formel (gilt bis A ≤ 1500 m):
  *
- *   Zone 1: s_k = 0,642 · ((1 + (A/728)²)
- *   Zone 2: s_k = 0,933 · ((1 + (A/512)²)
- *   Zone 3: s_k = 1,114 · (1 + (A/438)²)
- *   Zone 4: s_k = 1,549 · (1 + (A/452)²)
+ *   s_k = (0,642 · z + 0,009) · (1 + (A/728)²)
  *
- * (Vereinfachte Polynom-Ansätze gemäß ÖNORM Anhang B – ausreichend genau für Vorbemessung)
+ *   z = Zonenwert laut Schneelastzonen-Karte (1, 2, 3, 4; Zwischenzonen wie 2,5 möglich)
+ *   A = Seehöhe in m
  *
- * Mindestwert: s_k ≥ 0.4 kN/m² (auch im Tal).
+ * Beispiele zur Selbstkontrolle: Wien (Zone 2, ~170 m) → 1,36 kN/m²;
+ * Hartberg (Zone 3, 367 m) → 2,43 kN/m². Mindestwert s_k ≥ 0,4 kN/m².
+ *
+ * EINZIGE Quelle für s_k im Programm — auch src/lib/calculations.ts delegiert hierher,
+ * damit Lasten-Tab und Auto-Pipeline garantiert identische Werte liefern.
  */
 export function characteristicGroundSnow(zone: SnowZone, altitude: number): number {
   const A = Math.max(0, altitude);
-  let sk: number;
-  switch (zone) {
-    case '1': sk = 0.642 * (1 + Math.pow(A / 728, 2)); break;
-    case '2': sk = 0.933 * (1 + Math.pow(A / 512, 2)); break;
-    case '3': sk = 1.114 * (1 + Math.pow(A / 438, 2)); break;
-    case '4': sk = 1.549 * (1 + Math.pow(A / 452, 2)); break;
-  }
+  const z = Number(zone);
+  const sk = (0.642 * z + 0.009) * (1 + Math.pow(A / 728, 2));
   return Math.max(0.4, Math.round(sk * 100) / 100);
 }
 

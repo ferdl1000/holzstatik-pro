@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Edit, Save, Snowflake, Wind, Weight, ArrowDown, Check, RefreshCw, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { calculateSnowLoad, calculateWindPressure } from '@/lib/calculations';
+import { deadLoadForCovering } from '@/lib/auto/autoLoads';
 import { RecalculateAllButton } from './RecalculateAllButton';
 import { useRecalculateAll } from '@/lib/auto/useRecalculateAll';
 
@@ -20,7 +21,7 @@ const LOAD_ICONS: Record<string, typeof Snowflake> = {
 };
 
 const SNOW_ZONES = ['1', '2', '3', '4'];
-const WIND_ZONES = ['1', '2', '3'];
+const WIND_ZONES = ['1', '2', '3', '4'];
 const TERRAIN_CATEGORIES = ['I', 'II', 'III', 'IV'];
 
 export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
@@ -71,12 +72,14 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
       return;
     }
 
-    // Build load cases from scratch (no pre-seeded values)
+    // Build load cases from scratch (no pre-seeded values).
+    // Eigengewicht kommt aus der ERKANNTEN Eindeckung (gleiche Quelle wie Auto-Pipeline).
+    const dead = deadLoadForCovering(project.coveringType);
     const newLoadCases: LoadCase[] = [
       {
-        id: 'lc-eg', name: 'Eigengewicht Dachaufbau', type: 'permanent', value: 0.85, unit: 'kN/m²',
-        source: 'Manuelle Eingabe erforderlich – Standardannahme Ziegeldeckung + Lattung',
-        confidence: 0.50, isEditable: true, userModified: false, parameters: {},
+        id: 'lc-eg', name: 'Eigengewicht Dachaufbau', type: 'permanent', value: dead.gk, unit: 'kN/m²',
+        source: dead.source,
+        confidence: dead.confidence, isEditable: true, userModified: false, parameters: {},
       },
       {
         id: 'lc-snow', name: 'Schneelast', type: 'snow', value: snow.si, unit: 'kN/m²',
@@ -91,8 +94,9 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
         parameters: { zone: windZone, terrainCategory: terrainCat, vb0: wind.vb0 },
       },
       {
-        id: 'lc-nutz', name: 'Nutzlast (nicht begehbar)', type: 'variable', value: 0.50, unit: 'kN/m²',
-        source: 'ÖNORM B 1991-1-1, Kat. H', confidence: 0.95, isEditable: true, userModified: false, parameters: {},
+        id: 'lc-nutz', name: 'Nutzlast Wartung (Kat. H)', type: 'variable', value: 1.0, unit: 'kN/m²',
+        source: 'ÖNORM B 1991-1-1 Tab. 6.1 – Kategorie H (Dächer, nur Wartungszwecke)',
+        confidence: 0.95, isEditable: true, userModified: false, parameters: {},
       },
     ];
 
@@ -284,8 +288,8 @@ export function LoadsTab({ project, onUpdate }: LoadsTabProps) {
             <div className="rounded-md border border-[hsl(var(--status-yellow)/0.3)] bg-[hsl(var(--status-yellow-bg))] p-3 mt-4 flex items-start gap-2">
               <AlertTriangle className="h-3.5 w-3.5 text-[hsl(var(--status-yellow))] shrink-0 mt-0.5" />
               <p className="text-xs">
-                <strong>Eigengewicht:</strong> Der Standardwert 0,85 kN/m² basiert auf einer typischen Ziegeldeckung.
-                Bitte prüfen und ggf. an den tatsächlichen Dachaufbau anpassen.
+                <strong>Eigengewicht:</strong> Es wurde keine Eindeckung aus dem Plan erkannt — der Wert basiert
+                auf einer typischen Ziegeldeckung. Bitte prüfen und ggf. an den tatsächlichen Dachaufbau anpassen.
               </p>
             </div>
           )}
