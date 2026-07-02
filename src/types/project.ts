@@ -88,6 +88,10 @@ export interface Project {
   fireProtection?: FireProtection;
   /** Dimensionierungsmodus: wirtschaftlich (η ≤ 0.95) oder sicher (nächstes Profil, η ≤ 0.85) */
   dimensioningMode?: 'wirtschaftlich' | 'sicher';
+  /** Sparrenabstand in m, DIREKT aus dem Plan gelesen (z.B. "e = 80 cm") — hat Vorrang vor dem Default 0,8 */
+  sparrenSpacing?: number;
+  /** Im Plan beschriftete Holzquerschnitte (z.B. "Sparren 8/16") — Start-Querschnitte für die Bemessung */
+  planMemberSections?: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
 }
 
 // ===== Documents =====

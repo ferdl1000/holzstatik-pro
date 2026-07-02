@@ -64,7 +64,10 @@ function prefixMemberIds(members: TimberMember[], prefix: string): TimberMember[
 
 export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPipelineResult> {
   const { project } = input;
-  const sparrenSpacing = input.sparrenSpacing ?? 0.8;
+  // Aus dem PLAN gelesener Sparrenabstand ist die beste Quelle und schlägt den
+  // von Aufrufern mitgegebenen Default (0,8 m).
+  const sparrenSpacing = project.sparrenSpacing ?? input.sparrenSpacing ?? 0.8;
+  const planSections = project.planMemberSections;
   const ceilings = input.ceilings ?? project.ceilings;
 
   // ── 0. Pre-Validation: DN-Marker + Plausibilitätsprüfung VOR der Ableitung ──
@@ -186,7 +189,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
         derivedPartGeom.geometry,
         partRoofType,
         partStructSystem,
-        { sparrenSpacing, ceilings },
+        { sparrenSpacing, ceilings, planSections },
       );
 
       const prefixedMembers = prefixMemberIds(partMembersResult.members, rp.id);
@@ -211,7 +214,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       derivedGeometry.geometry,
       roofTypeRaw,
       structuralSystemRaw,
-      { sparrenSpacing, ceilings },
+      { sparrenSpacing, ceilings, planSections },
     );
   }
 

@@ -57,12 +57,31 @@ export function autoGenerateMembers(
   geometry: BuildingGeometry,
   _roofType: RoofType,
   structuralSystem: StructuralSystem,
-  opts?: { sparrenSpacing?: number; ceilings?: CeilingArea[]; wallConstructions?: WallConstruction[] },
+  opts?: {
+    sparrenSpacing?: number; ceilings?: CeilingArea[]; wallConstructions?: WallConstruction[];
+    /** Im Plan beschriftete Querschnitte (aus textParser) — Start-Querschnitte statt Defaults */
+    planSections?: { member: string; b: number; h: number; raw: string }[];
+  },
 ): AutoMembersResult {
   _idCounter = 0; // reset für deterministische IDs
 
   const assumptions: AutoAssumption[] = [];
   const members: TimberMember[] = [];
+
+  // Plan-Querschnitt je Bauteiltyp nachschlagen; Default nur wenn Plan nichts sagt.
+  const planSec = (member: string, defB: number, defH: number): { b: number; h: number; fromPlan: boolean } => {
+    const s = opts?.planSections?.find((x) => x.member === member);
+    if (s) {
+      assumptions.push({
+        field: `${member}.crossSection`,
+        value: `${s.b / 10}/${s.h / 10}`,
+        reason: `Querschnitt ${s.b / 10}/${s.h / 10} cm DIREKT aus Planbeschriftung „${s.raw}" übernommen — Optimizer prüft die Tragfähigkeit.`,
+        source: 'derived',
+      });
+      return { b: s.b, h: s.h, fromPlan: true };
+    }
+    return { b: defB, h: defH, fromPlan: false };
+  };
 
   // ── Sanity-Check Geometrie (Schutz gegen NaN/Infinity/negative Werte) ────
   const sanitized = sanitizeGeometry(geometry);
@@ -273,27 +292,30 @@ export function autoGenerateMembers(
   // ═══════════════════════════════════════════════════════════════════════════
 
   // ── Sparren (alle Tragsysteme) ───────────────────────────────────────────
+  const sprSec = planSec('sparren', 80, 160);
   const sparren = makeMember({
     idPrefix: 'SPR',
     name: `Sparren S1-S${sparrenCount}`,
     type: 'sparren',
     material: 'C24',
-    width: 80,
-    height: 160,
+    width: sprSec.b,
+    height: sprSec.h,
     length: sparrenLen,
     quantity: sparrenCount,
-    crossSection: '8/16',
+    crossSection: `${sprSec.b / 10}/${sprSec.h / 10}`,
   });
   members.push(sparren);
 
-  assumptions.push({
-    field: 'sparren.crossSection',
-    value: '8/16',
-    reason: isPultdachForm
-      ? `Standard-KVH-Querschnitt 8/16 cm C24 für Pultdach-Sparren angenommen (eine Seite, Länge ${sparrenLen} m über volle Gebäudebreite) — wird durch Optimizer verifiziert.`
-      : 'Standard-KVH-Querschnitt 8/16 cm C24 für Sparren angenommen — wird durch Optimizer verifiziert.',
-    source: 'standard',
-  });
+  if (!sprSec.fromPlan) {
+    assumptions.push({
+      field: 'sparren.crossSection',
+      value: '8/16',
+      reason: isPultdachForm
+        ? `Standard-KVH-Querschnitt 8/16 cm C24 für Pultdach-Sparren angenommen (eine Seite, Länge ${sparrenLen} m über volle Gebäudebreite) — wird durch Optimizer verifiziert.`
+        : 'Standard-KVH-Querschnitt 8/16 cm C24 für Sparren angenommen — wird durch Optimizer verifiziert.',
+      source: 'standard',
+    });
+  }
 
   // ── Tragsystem-spezifische Zusatzbauteile ────────────────────────────────
 
@@ -333,25 +355,28 @@ export function autoGenerateMembers(
   }
 
   if (sysType === 'pfettendach' || sysType === 'pfettendach_mittelpfette' || sysType === 'sonderfall') {
-    // Firstpfette
+    // Firstpfette — Querschnitt aus Planbeschriftung, wenn vorhanden
+    const pfSec = planSec('pfette', 100, 220);
     members.push(makeMember({
       idPrefix: 'FP',
       name: 'Firstpfette FP1',
       type: 'pfette',
       material: 'C24',
-      width: 100,
-      height: 220,
+      width: pfSec.b,
+      height: pfSec.h,
       length: buildingLength,
       quantity: 1,
-      crossSection: '10/22',
+      crossSection: `${pfSec.b / 10}/${pfSec.h / 10}`,
     }));
 
-    assumptions.push({
-      field: 'firstpfette.crossSection',
-      value: '10/22',
-      reason: 'Standard-Querschnitt 10/22 cm C24 für Firstpfette angenommen.',
-      source: 'standard',
-    });
+    if (!pfSec.fromPlan) {
+      assumptions.push({
+        field: 'firstpfette.crossSection',
+        value: '10/22',
+        reason: 'Standard-Querschnitt 10/22 cm C24 für Firstpfette angenommen.',
+        source: 'standard',
+      });
+    }
 
     if (sysType === 'pfettendach_mittelpfette') {
       // Mittelpfette je Dachseite
@@ -369,11 +394,11 @@ export function autoGenerateMembers(
           name: `Mittelpfette MP${side}`,
           type: 'pfette',
           material: 'C24',
-          width: 100,
-          height: 220,
+          width: pfSec.b,
+          height: pfSec.h,
           length: buildingLength,
           quantity: 1,
-          crossSection: '10/22',
+          crossSection: `${pfSec.b / 10}/${pfSec.h / 10}`,
         }));
       }
 

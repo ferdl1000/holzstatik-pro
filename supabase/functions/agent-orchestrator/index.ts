@@ -555,6 +555,17 @@ serve(async (req) => {
     // säubern → Hauptdach-/Vordach-Garantie → Geometrie-Schiedsrichter → Vordach-Kappung → Dedup.
     const facts = (extracted.parsedFacts as any) || {};
     const factUeberCount: number = facts.ueberdachungCount ?? 0;
+
+    // Aus dem Plan gelesener Sparrenabstand + beschriftete Querschnitte → echte
+    // Eingangsdaten für die Statik statt Default-Annahmen (0,8 m / 8/16).
+    if (typeof facts.sparrenSpacing === 'number' && facts.sparrenSpacing > 0) {
+      projectUpdate.sparrenSpacing = facts.sparrenSpacing;
+      log.push(`✓ Sparrenabstand aus Plan gelesen: e = ${(facts.sparrenSpacing * 100).toFixed(0)} cm (statt Default 80 cm)`);
+    }
+    if (Array.isArray(facts.memberSections) && facts.memberSections.length > 0) {
+      projectUpdate.planMemberSections = facts.memberSections;
+      log.push(`✓ Querschnitte aus Plan gelesen: ${facts.memberSections.map((s: any) => `${s.member} ${s.b}/${s.h}`).join(', ')}`);
+    }
     const factDnMarkers: Array<{ value: number }> = facts.dnMarkers ?? [];
     const dimsArr = (extracted.dimensions || []) as Array<{ label?: string; value: number }>;
     const findDim = (l: string) => dimsArr.find((d) => d.label?.toLowerCase().includes(l))?.value ?? 0;

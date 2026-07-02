@@ -21,6 +21,10 @@ export interface ParsedFacts {
   fireProtection: { gk?: string; reiClasses: string[] };
   wallHints: { type: string; thickness?: number; raw: string }[];
   structureHints: string[];
+  /** Sparrenabstand in m, direkt aus dem Plan gelesen (z.B. "e = 80 cm") — null wenn nicht angegeben */
+  sparrenSpacing: number | null;
+  /** Im Plan beschriftete Holzquerschnitte je Bauteiltyp, z.B. "Sparren 8/16" → {member:'sparren', b:80, h:160} */
+  memberSections: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
 }
 
 /** Wandelt "10", "10,5", "10.5" → number */
@@ -278,6 +282,68 @@ export function parseStructure(text: string): string[] {
 /**
  * Haupt-Parser: zieht ALLE harten Fakten aus dem Roh-Text.
  */
+/**
+ * Sparrenabstand aus dem Plan lesen. Übliche Schreibweisen österreichischer Pläne:
+ *   "e = 80 cm", "e=90", "a = 0,80 m", "Sparrenabstand 80 cm", "Achsabstand 62,5 cm",
+ *   "Sparren ... e=80cm". Plausibles Band 30–150 cm — alles außerhalb wird verworfen
+ *   (sonst fängt man Bemaßungsketten oder Pfettenabstände ein).
+ */
+export function parseSparrenabstand(text: string): number | null {
+  const candidates: number[] = [];
+  const push = (v: number, unit: string | undefined) => {
+    // Einheit erkennen: explizit m → ×100; explizit cm → direkt; ohne Einheit: <3 heißt m, sonst cm
+    let cm = v;
+    if (unit && /m\b/i.test(unit) && !/cm/i.test(unit)) cm = v * 100;
+    else if (!unit && v < 3) cm = v * 100;
+    if (cm >= 30 && cm <= 150) candidates.push(Math.round(cm * 10) / 10);
+  };
+  // "Sparrenabstand 80 cm" / "Achsabstand 62,5cm"
+  const wordRe = /(?:sparren|achs)abstand\s*[:=]?\s*(\d{1,3}(?:[.,]\d+)?)\s*(cm|m)?/gi;
+  // "e = 80 cm" / "a=0,80m" — nur mit Sparren-Kontext in der Nähe (±40 Zeichen), sonst zu viele Treffer
+  const shortRe = /\b[ea]\s*=\s*(\d{1,3}(?:[.,]\d+)?)\s*(cm|m)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = wordRe.exec(text)) !== null) push(num(m[1]), m[2]);
+  while ((m = shortRe.exec(text)) !== null) {
+    const ctx = text.slice(Math.max(0, m.index - 40), m.index + 40);
+    if (/sparren|spärren|rafter|lattung|konter/i.test(ctx)) push(num(m[1]), m[2]);
+  }
+  if (candidates.length === 0) return null;
+  // Häufigster Wert gewinnt (Pläne wiederholen den Abstand oft mehrfach)
+  const counts = new Map<number, number>();
+  candidates.forEach((c) => counts.set(c, (counts.get(c) ?? 0) + 1));
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  return Math.round((best / 100) * 1000) / 1000; // → m
+}
+
+/**
+ * Beschriftete Holzquerschnitte je Bauteiltyp: "Sparren 8/16", "Pfette 10/22 cm",
+ * "Stütze 12/12", "Kehlbalken 8/16". cm-Angaben (Werte ≤ 40) → mm; mm-Angaben direkt.
+ * Plausibles Band 60–400 mm je Seite.
+ */
+export function parseMemberSections(text: string): ParsedFacts['memberSections'] {
+  const out: ParsedFacts['memberSections'] = [];
+  const seen = new Set<string>();
+  const re = /(sparren|pfette(?:n)?|stütze(?:n)?|steher|kehlbalken)\D{0,20}?(\d{1,3})\s*\/\s*(\d{1,3})\s*(cm|mm)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const word = m[1].toLowerCase();
+    const member = word.startsWith('sparren') ? 'sparren'
+      : word.startsWith('pfette') ? 'pfette'
+      : word.startsWith('kehl') ? 'kehlbalken'
+      : 'stuetze';
+    let b = num(m[2]);
+    let h = num(m[3]);
+    const unit = m[4]?.toLowerCase();
+    if (unit === 'cm' || (!unit && b <= 40 && h <= 40)) { b *= 10; h *= 10; }
+    if (b < 60 || b > 400 || h < 60 || h > 400) continue;
+    const key = `${member}:${b}/${h}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ member, b, h, raw: m[0].trim() });
+  }
+  return out;
+}
+
 export function parseAllFacts(text: string): ParsedFacts {
   const ueber = parseUeberdachung(text);
   return {
@@ -292,5 +358,7 @@ export function parseAllFacts(text: string): ParsedFacts {
     fireProtection: parseFireProtection(text),
     wallHints: parseWalls(text),
     structureHints: parseStructure(text),
+    sparrenSpacing: parseSparrenabstand(text),
+    memberSections: parseMemberSections(text),
   };
 }
