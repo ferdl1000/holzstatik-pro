@@ -23,12 +23,21 @@ function pfettendach(supportSpacing?: number): StructuralSystem {
 }
 
 describe('supportSpacing — konfigurierbarer Stützenabstand (autoMembers)', () => {
-  it('verwendet 4.0 m als Default wenn nicht gesetzt', () => {
+  it('ohne expliziten Stützenabstand: nur 1–2 Lastverteilungs-Steher (Pfetten lagern auf Wänden)', () => {
+    const { members: defaultMembers, assumptions } = autoGenerateMembers(geometry, roofType, pfettendach(undefined));
+    const stuetzenDefault = defaultMembers.filter(m => m.type === 'stuetze' && m.name.startsWith('Stützen'));
+    expect(stuetzenDefault[0]?.quantity).toBeLessThanOrEqual(2);
+    expect(assumptions.some(a => a.field === 'stuetze.auflager' && a.reason.includes('tragende'))).toBe(true);
+    // KEINE automatischen Zwischensteher-Reihen mehr
+    expect(defaultMembers.some(m => m.name.includes('Zwischensteher'))).toBe(false);
+  });
+
+  it('explizit gesetzter Stützenabstand (Holzriegel/Halle) erzeugt volle Steher-Reihen', () => {
     const { members: defaultMembers } = autoGenerateMembers(geometry, roofType, pfettendach(undefined));
     const { members: explicit4 } = autoGenerateMembers(geometry, roofType, pfettendach(4.0));
-    const stuetzenDefault = defaultMembers.filter(m => m.type === 'stuetze' && m.name.startsWith('Stützen'));
-    const stuetzenExplicit = explicit4.filter(m => m.type === 'stuetze' && m.name.startsWith('Stützen'));
-    expect(stuetzenDefault[0]?.quantity).toBe(stuetzenExplicit[0]?.quantity);
+    const nDefault = defaultMembers.find(m => m.type === 'stuetze' && m.name.startsWith('Stützen'))?.quantity ?? 0;
+    const nExplicit = explicit4.find(m => m.type === 'stuetze' && m.name.startsWith('Stützen'))?.quantity ?? 0;
+    expect(nExplicit).toBeGreaterThan(nDefault);
   });
 
   it('engerer Stützenabstand erzeugt MEHR Stützen', () => {

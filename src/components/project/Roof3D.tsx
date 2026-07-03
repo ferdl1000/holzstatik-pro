@@ -59,6 +59,7 @@ const COLORS = {
   floor: '#d0d4cf',
   roof: '#b05035',
   ridge: '#8b3f2b',
+  deck: '#b5651d',
   dim: '#2b3744',
   dimText: '#1e293b',
 } as const;
@@ -203,50 +204,96 @@ function buildPartBoxes(
     }
   }
 
-  // === Firstpfette - dachformabhängig ===
+  // ZIMMERER-GEOMETRIE: Pfetten liegen UNTER der Sparrenlage (Sparren ruhen auf
+  // ihnen), niemals außen auf den Sparren. Abstand Sparrenachse → Unterkante
+  // entlang der Vertikalen: (h_Sparren/2) / cos(α).
+  const sparH = (sparrenList[0]?.height ?? 160) / 1000;
+  const cosA = Math.max(Math.cos(angle), 0.5);
+  const underRafter = (sparH / 2) / cosA;
+  const midY = (eavesHeight + ridgeHeight) / 2;
+
+  // === Firstpfette — stehend, direkt unter dem First (Sparren lagern auf ihr) ===
+  let firstPfettenY: number | null = null;
   for (const fp of firstPfetten) {
     if (isPultdach || isFlachdach) continue; // keine Firstpfette
     const ridgeLen = isWalm
       ? (form === 'krueppelwalmdach' ? length * 0.7 : Math.max(0.1, length - width))
       : length;
+    const fpH = fp.height / 1000;
+    const y = ridgeHeight - underRafter - fpH / 2;
+    firstPfettenY = y;
     add({ key: `${partId}-fp-${fp.id}`, memberId: fp.id, memberName: fp.name,
-          pos: [0, ridgeHeight, 0], rot: [0, 0, 0],
-          dims: [ridgeLen, fp.height / 1000, fp.width / 1000],
+          pos: [0, y, 0], rot: [0, 0, 0],
+          dims: [ridgeLen, fpH, fp.width / 1000],
           color: utilizationColor(utilizations[fp.id]) });
   }
 
-  // === Mittelpfetten ===
+  // === Mittelpfetten — unter der Sparrenlage auf halber Dachhöhe ===
   const midPfetten = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
-  const midY = (eavesHeight + ridgeHeight) / 2;
+  let midPfettenY: number | null = null;
   midPfetten.forEach((mp, idx) => {
+    const mpH = mp.height / 1000;
     const side = idx % 2 === 0 ? -1 : 1;
+    // Pultdach/Flachdach: Pfette mittig unter dem durchgehenden Sparren
+    const z = (isPultdach || isFlachdach) ? 0 : (side * halfWidth) / 2;
+    const yAxis = isFlachdach ? eavesHeight : (isPultdach ? eavesHeight + rise / 2 : midY);
+    const y = yAxis - underRafter - mpH / 2;
+    midPfettenY = y;
     add({ key: `${partId}-mp-${mp.id}`, memberId: mp.id, memberName: mp.name,
-          pos: [0, midY, (side * halfWidth) / 2], rot: [0, 0, 0],
-          dims: [length, mp.height / 1000, mp.width / 1000],
+          pos: [0, y, z], rot: [0, 0, 0],
+          dims: [length, mpH, mp.width / 1000],
           color: utilizationColor(utilizations[mp.id]) });
   });
 
-  // === Fußpfetten ===
+  // === Fußpfetten / Mauerbank — AUF der Mauerkrone (innenbündig), nicht in der Wand ===
   fussPfetten.forEach((fp, idx) => {
     const side = idx % 2 === 0 ? -1 : 1;
+    const fpH = fp.height / 1000;
     add({ key: `${partId}-fusp-${fp.id}`, memberId: fp.id, memberName: fp.name,
-          pos: [0, eavesHeight, side * halfWidth], rot: [0, 0, 0],
-          dims: [length, fp.height / 1000, fp.width / 1000],
+          pos: [0, eavesHeight + fpH / 2, side * (halfWidth - 0.15)], rot: [0, 0, 0],
+          dims: [length, fpH, fp.width / 1000],
           color: utilizationColor(utilizations[fp.id]) });
   });
 
-  // === Stützen ===
+  // === Stützen (Steher) — direkt UNTER der zugehörigen Pfette, Kopf an deren Unterkante ===
   for (const st of stuetzenList) {
     const qty = Math.max(1, st.quantity);
     const stH = st.length || (ridgeHeight - 0.5);
-    const spacing = length / qty;
+    const spacing = length / (qty + 1);
     const color = utilizationColor(utilizations[st.id]);
+    const isFirstSteher = /first/i.test(st.name) || midPfetten.length === 0;
     for (let i = 0; i < qty; i++) {
-      const x = -length / 2 + (i + 0.5) * spacing;
-      const side = i % 2 === 0 ? -1 : 1;
+      const x = -length / 2 + (i + 1) * spacing;
+      const pfettenY = isFirstSteher ? firstPfettenY : midPfettenY;
+      const pfettenZ = isFirstSteher ? 0 : ((i % 2 === 0 ? -1 : 1) * halfWidth) / 2;
+      const pfH = ((isFirstSteher ? firstPfetten[0] : midPfetten[0])?.height ?? 220) / 1000;
+      const topY = (pfettenY ?? (ridgeHeight - underRafter)) - pfH / 2;
       add({ key: `${partId}-st-${st.id}-${i}`, memberId: st.id, memberName: st.name,
-            pos: [x, stH / 2, (side * halfWidth) / 2], rot: [0, 0, 0],
+            pos: [x, topY - stH / 2, pfettenZ], rot: [0, 0, 0],
             dims: [st.width / 1000, stH, st.height / 1000], color });
+    }
+  }
+
+  // === Kaltdach-Aufbau über den Sparren: Vollschalung + Abdichtung + Konterlattung + Lattung ===
+  // Als halbtransparente Schicht dargestellt, damit die Tragkonstruktion sichtbar bleibt.
+  if (sparrenList.length > 0 && !isWalm) {
+    const deckName = 'Dachaufbau (Kaltdach): Vollschalung 2,4 cm + Abdichtung + Konterlattung 5/8 + Lattung 3/5';
+    const deckThick = 0.11; // 2,4 Schalung + 5 Konterlatte + 3 Lattung ≈ 11 cm
+    const liftUp = (sparH / 2 + deckThick / 2) / cosA;
+    if (isPultdach) {
+      add({ key: `${partId}-deck`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
+            pos: [0, eavesHeight + rise / 2 + liftUp, 0], rot: [Math.atan2(rise, width), 0, 0],
+            dims: [length, deckThick, Math.sqrt(width * width + rise * rise)], opacity: 0.45, transparent: true });
+    } else if (isFlachdach) {
+      add({ key: `${partId}-deck`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
+            pos: [0, eavesHeight + sparH / 2 + deckThick / 2, 0], rot: [0.03, 0, 0],
+            dims: [length, deckThick, width], opacity: 0.45, transparent: true });
+    } else {
+      for (const side of [-1, 1] as const) {
+        add({ key: `${partId}-deck-${side}`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
+              pos: [0, midY + liftUp, side * halfWidth / 2], rot: [side * angle, 0, 0],
+              dims: [length, deckThick, sparrenLen], opacity: 0.45, transparent: true });
+      }
     }
   }
 

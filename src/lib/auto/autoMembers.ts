@@ -425,10 +425,27 @@ export function autoGenerateMembers(
       });
     }
 
-    // Stützen unter First- und ggf. Mittelpfette — Abstand nachträglich im
-    // Tragwerk-Tab konfigurierbar (kleinerer Abstand → kürzere Pfettenstützweite).
+    // Stützen (Steher): Im Massivbau lagern Pfetten auf Giebel- und tragenden
+    // Innenwänden — Holzsteher gibt es dort NICHT flächendeckend, sondern nur
+    // 1–2 Stück zur Lastverteilung, und nur wo tragende Wände/Unterzüge darunter
+    // stehen (Zimmerer-Praxis; Hinweis vom Nutzer). Volle Steher-Reihen nur,
+    // wenn der Nutzer den Stützenabstand im Tragwerk-Tab EXPLIZIT setzt
+    // (z.B. Holzriegelbau/offene Halle).
     const stuetzenAbstand = structuralSystem.supportSpacing ?? 4.0;
-    const stuetzenAnzahlFirst = Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1);
+    const explicitSpacing = structuralSystem.supportSpacing != null;
+    const stuetzenAnzahlFirst = explicitSpacing
+      ? Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1)
+      : Math.min(2, Math.max(1, Math.round(buildingLength / 10)));
+    if (!explicitSpacing) {
+      assumptions.push({
+        field: 'stuetze.auflager',
+        value: `${stuetzenAnzahlFirst} Lastverteilungs-Steher`,
+        reason: `Pfetten lagern auf Giebel-/tragenden Innenwänden (statische Stützweite ${stuetzenAbstand} m angenommen). ` +
+          `Nur ${stuetzenAnzahlFirst} Holzsteher zur Lastverteilung angesetzt — bitte gegen Plan prüfen: ` +
+          `Steher nur dort, wo tragende Wände/Unterzüge darunter stehen. Bei Holzriegelbau/offener Halle Stützenabstand im Tragwerk-Tab setzen.`,
+        source: 'standard',
+      });
+    }
     const stuetzenHoehe = +(ridgeH / 2 - 2.5).toFixed(2); // vereinfacht: halbe Gebäudehöhe - Deckenebene
 
     const stuetzenHoeheKorrekt = Math.max(stuetzenHoehe, 0.5); // mindestens 0.5 m sinnvoll
@@ -469,27 +486,16 @@ export function autoGenerateMembers(
       source: 'standard',
     });
 
-    // Zwischensteher (Auflagerung Sparren in der Mitte) wenn Sparrenstützweite > 3.5 m
-    const halfSpan = buildingWidth / 2;  // klassische Sparrenstützweite ist halbe Gebäudebreite
-    if (halfSpan > 3.5) {
-      const zwischenAbstand = 0.8 * 2; // jeder 2. Sparren
-      const zwischenstAnzahl = Math.max(2, Math.ceil(buildingLength / zwischenAbstand) * 2); // beide Seiten
-      const zwischenstHoehe = +(ridgeHeight * 0.5).toFixed(2);
-      members.push(makeMember({
-        idPrefix: 'ZS',
-        name: `Zwischensteher ZS1-ZS${zwischenstAnzahl}`,
-        type: 'stuetze',
-        material: 'C24',
-        width: 100,
-        height: 100,
-        length: zwischenstHoehe,
-        quantity: zwischenstAnzahl,
-        crossSection: '10/10',
-      }));
+    // KEINE automatischen Zwischensteher-Reihen: große Sparrenstützweiten werden
+    // über die Mittelpfette abgetragen (die auf tragenden Wänden lagert), nicht
+    // über Steher-Wälder unter jedem 2. Sparren. Steher nur, wenn der Plan sie
+    // zeigt (Holzriegelbau/Halle → Stützenabstand im Tragwerk-Tab setzen).
+    const halfSpan = buildingWidth / 2;
+    if (halfSpan > 4.5 && sysType !== 'pfettendach_mittelpfette') {
       assumptions.push({
-        field: 'zwischensteher',
-        value: `${zwischenstAnzahl} Stk`,
-        reason: `Sparrenstützweite ${halfSpan.toFixed(1)} m > 3,5 m → Zwischensteher in halber Höhe alle 1.6 m (jeder 2. Sparren), beide Dachseiten. Höhe ${zwischenstHoehe} m, 10/10 cm.`,
+        field: 'sparren.stuetzweite',
+        value: `${halfSpan.toFixed(1)} m`,
+        reason: `Sparrenstützweite ${halfSpan.toFixed(1)} m ist groß — Mittelpfette (Tragsystem „Pfettendach mit Mittelpfette") oder tragende Zwischenwand lt. Plan prüfen.`,
         source: 'derived',
       });
     }

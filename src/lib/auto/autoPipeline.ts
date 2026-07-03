@@ -186,11 +186,19 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       const partStructSystem: StructuralSystem = defaultStructuralSystemForPart(rp);
       const partRoofType: RoofType = { form: rp.form, confidence: rp.confidence, alternatives: [], userConfirmed: false };
 
+      // Decken (Deckenbalken) gehören NUR zum Hauptgebäude — sonst bekommt jedes
+      // Vordach/Carport nochmal die kompletten Deckenbalken (Preis multipliziert
+      // sich mit jedem erkannten Dachteil!). Ebenso Plan-Querschnitte: die gelten
+      // fürs Hauptdach, nicht für ein 3-m-Vordach.
+      const isMainPart = rp.kind === 'main';
       const partMembersResult = autoGenerateMembers(
         derivedPartGeom.geometry,
         partRoofType,
         partStructSystem,
-        { sparrenSpacing, ceilings, planSections, roofOverhang },
+        {
+          sparrenSpacing, roofOverhang,
+          ...(isMainPart ? { ceilings, planSections } : {}),
+        },
       );
 
       const prefixedMembers = prefixMemberIds(partMembersResult.members, rp.id);
