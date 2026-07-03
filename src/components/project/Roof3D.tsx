@@ -75,6 +75,78 @@ interface BoxData {
   color: string;
   opacity?: number;
   transparent?: boolean;
+  /** Zimmerer-Profil (Schnittkontur in der Quer/Höhen-Ebene) statt Box:
+   *  Punkte [zQuer, yHöhe], extrudiert um profileDepth entlang der Firstrichtung. */
+  profile?: [number, number][];
+  profileDepth?: number;
+}
+
+/**
+ * Sparren-Längsprofil mit den echten Zimmerer-Schnitten (in Weltkoordinaten
+ * der Schnittebene: x = horizontal quer, y = Höhe — dadurch sind Waagschnitte
+ * einfach y=konstant und Lotschnitte x=konstant, exakt wie am Bauholz):
+ *  - lotrechter Firstschnitt (gegen Gegensparren/Firstpfette)
+ *  - Kerve (Waagschnitt-Sohle + talseitiger Lotschnitt-Stoß) an jeder Pfette
+ *  - Traufende: lotrechter Abschnitt + Zierschnitt (Fase) an der unteren Ecke
+ *
+ * zRidge = Querposition First, zEave = Querposition Sparrenende (inkl. Überstand),
+ * yTopRidge = Oberkante Sparren am First, tan = Steigung, hV = vertikale Sparrendicke.
+ * kerven: talseitige Stoßkanten [zStoss] (zwischen zRidge und zEave).
+ */
+function sparrenProfil(
+  zRidge: number, zEave: number, yTopRidge: number, tan: number, hV: number,
+  kerven: number[],
+): [number, number][] {
+  const dir = Math.sign(zEave - zRidge) || 1; // Seite (+1 / −1)
+  const zr = Math.abs(zEave - zRidge);
+  const yo = (dz: number) => yTopRidge - dz * tan;      // Oberkante, dz = |z − zRidge|
+  const yu = (dz: number) => yo(dz) - hV;               // Unterkante
+  const pts: [number, number][] = [];
+  const P = (dz: number, y: number) => pts.push([zRidge + dir * dz, y]);
+
+  // Oberkante: First → Traufe
+  P(0, yo(0));
+  P(zr, yo(zr));
+  // Traufende: lotrecht runter + Zierschnitt-Fase an der unteren Ecke
+  const fase = Math.min(0.12, hV * 0.45);
+  P(zr, yu(zr) + fase);
+  P(zr - fase, yu(zr - fase));
+  // Unterkante zurück Richtung First, mit Kerven (talseitige zuerst)
+  const t = Math.max(0.02, Math.min(hV / 4, 0.35 * tan + 0.01)); // Kerventiefe ≤ h/4
+  const sorted = kerven
+    .map(z => Math.abs(z - zRidge))
+    .filter(dz => dz > t / Math.max(tan, 0.08) + 0.05 && dz < zr - fase - 0.05)
+    .sort((a, b) => b - a);
+  for (const dzStoss of sorted) {
+    const sohleY = yu(dzStoss) + t;                     // Sohle waagrecht auf Pfetten-OK
+    const dzAuslauf = dzStoss - t / Math.max(tan, 0.08); // wo Sohle die Unterkante trifft
+    P(dzStoss, yu(dzStoss));   // Unterkante bis zum Stoß
+    P(dzStoss, sohleY);        // Lotschnitt (Stoß, hakt talseitig gegen die Pfette)
+    P(Math.max(dzAuslauf, 0.05), sohleY); // Waagschnitt (Auflager-Sohle)
+  }
+  // lotrechter Firstschnitt
+  P(0, yu(0));
+  return pts;
+}
+
+/** Rendert ein Bauteil mit Zimmerer-Schnittprofil (Kerven, First-/Zierschnitt) als Extrusionskörper. */
+function ProfileMesh({ b, isSelected, onClick }: { b: BoxData; isSelected: boolean; onClick: () => void }) {
+  const geometry = useMemo(() => {
+    const shape = new THREE.Shape();
+    b.profile!.forEach(([px, py], i) => (i === 0 ? shape.moveTo(px, py) : shape.lineTo(px, py)));
+    shape.closePath();
+    return new THREE.ExtrudeGeometry(shape, { depth: b.profileDepth ?? 0.08, bevelEnabled: false });
+  }, [b.profile, b.profileDepth]);
+  return (
+    <mesh geometry={geometry} position={b.pos} rotation={b.rot}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <meshStandardMaterial
+        color={b.color}
+        emissive={isSelected ? new THREE.Color('#fff200') : new THREE.Color('#000000')}
+        emissiveIntensity={isSelected ? 0.35 : 0}
+      />
+    </mesh>
+  );
 }
 
 function buildPartBoxes(
@@ -141,14 +213,21 @@ function buildPartBoxes(
     const color = utilizationColor(utilizations[sm.id]);
 
     if (isPultdach) {
+      // Pultdach: durchgehender Sparren mit Kerven auf beiden Mauerbänken +
+      // ggf. Mittelpfette, Zierschnitt am tiefen Traufende.
       const spacing = length / qty;
-      const pultAngle = Math.atan2(rise, width);
-      const midY = eavesHeight + rise / 2;
+      const pultTan = rise / width;
+      const hV = h / Math.max(Math.cos(Math.atan2(rise, width)), 0.5);
+      const kervenZ: number[] = [];
+      if (fussPfetten.length > 0) { kervenZ.push(-(halfWidth - 0.09)); kervenZ.push(halfWidth - 0.09); }
+      const midListPult = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
+      if (midListPult.length > 0) kervenZ.push(0.05);
+      const profile = sparrenProfil(-halfWidth, halfWidth + 0.4, ridgeHeight, pultTan, hV, kervenZ);
       for (let i = 0; i < qty; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         add({ key: `${partId}-spr-${sm.id}-${i}`, memberId: sm.id, memberName: sm.name,
-              pos: [x, midY, 0], rot: [pultAngle, 0, 0],
-              dims: [b, h, Math.sqrt(width*width + rise*rise)], color });
+              pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
+              dims: [b, h, sLen], color, profile, profileDepth: b });
       }
     } else if (isFlachdach) {
       const spacing = length / qty;
@@ -189,16 +268,23 @@ function buildPartBoxes(
         }
       }
     } else {
-      // Satteldach: beide Seiten
+      // Satteldach: beide Seiten — echtes Zimmerer-Profil: lotrechter Firstschnitt,
+      // Kerve auf Mauerbank + Mittelpfette, Zierschnitt am Sparrenende.
       const perSide = Math.ceil(qty / 2);
       const spacing = length / perSide;
-      const midY = (eavesHeight + ridgeHeight) / 2;
+      const hV = h / Math.max(Math.cos(angle), 0.5);
+      const overhangH = Math.max(0.25, ((sLen || sparrenLen) - sparrenLen) * Math.cos(angle));
+      const kervenZ: number[] = [];
+      if (fussPfetten.length > 0) kervenZ.push(halfWidth - 0.09);
+      const midListS = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
+      if (midListS.length > 0) kervenZ.push(halfWidth / 2 + ((midListS[0]?.width ?? 100) / 2000));
       for (let i = 0; i < perSide; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         for (const side of [-1, 1] as const) {
+          const profile = sparrenProfil(0, side * (halfWidth + overhangH), ridgeHeight, rise / halfWidth, hV, kervenZ.map(z => side * z));
           add({ key: `${partId}-spr-${sm.id}-${i}-${side}`, memberId: sm.id, memberName: sm.name,
-                pos: [x, midY, side * halfWidth / 2], rot: [side * angle, 0, 0],
-                dims: [b, h, sLen || sparrenLen], color });
+                pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
+                dims: [b, h, sLen || sparrenLen], color, profile, profileDepth: b });
         }
       }
     }
@@ -614,6 +700,12 @@ function Scene({ roofParts: rawParts, utilizations, selectedId, onSelect, showDi
       {boxes.map(b => {
         const isWall = !b.memberId;
         const isSelected = b.memberId && b.memberId === selectedId;
+        if (b.profile) {
+          return (
+            <ProfileMesh key={b.key} b={b} isSelected={!!isSelected}
+              onClick={() => { if (b.memberId) onSelect(selectedId === b.memberId ? null : b.memberId); }} />
+          );
+        }
         return (
           <mesh
             key={b.key}
