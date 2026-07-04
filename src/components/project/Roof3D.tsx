@@ -263,19 +263,23 @@ function buildPartBoxes(
                 dims: [b, h, sparrenLen], color, profile: profileW, profileDepth: b });
         }
       }
-      // Walm: kurze Sparren an Giebelseiten in 45° Richtung
+      // Walm-Schifter an den Giebelseiten: laufen quer (entlang X) von der
+      // Giebel-Mauerbank zum Firstende — als echtes Profil mit Kerve + Zierschnitt.
+      // Das Profil liegt hier in der (x,y)-Ebene, Extrusion entlang Z (rot = 0).
       const ridgeLen = form === 'krueppelwalmdach' ? length * 0.7 : Math.max(0.1, length - width);
+      const walmDepth = Math.max(0.5, (length - ridgeLen) / 2);
+      const tanWalm = rise / walmDepth;
       for (const endSide of [-1, 1] as const) {
-        const endX = endSide * (length / 2 - (length - ridgeLen) / 2);
+        const xRidgeEnd = endSide * (ridgeLen / 2);
+        const xEaveEnd = endSide * (length / 2 + 0.25);
+        const kervenWalm = fussPfetten.length > 0 ? [endSide * (length / 2 - 0.09)] : [];
+        const profileWalm = sparrenProfil(xRidgeEnd, xEaveEnd, ridgeHeight, tanWalm, hVW, kervenWalm);
         for (let i = 0; i < 3; i++) {
-          for (const side of [-1, 1] as const) {
-            const offset = (i - 1) * width / 6;
-            add({ key: `${partId}-spr-${sm.id}-walm-${endSide}-${i}-${side}`,
-                  memberId: sm.id, memberName: sm.name,
-                  pos: [endX, midY, side * halfWidth / 2 + offset * 0.3],
-                  rot: [side * angle, 0, 0],
-                  dims: [b, h, sparrenLen * 0.7], color, opacity: 0.85, transparent: true });
-          }
+          const zk = ((i - 1) * width) / 5;
+          add({ key: `${partId}-spr-${sm.id}-walm-${endSide}-${i}`,
+                memberId: sm.id, memberName: sm.name,
+                pos: [0, 0, zk - b / 2], rot: [0, 0, 0],
+                dims: [b, h, sparrenLen * 0.7], color, profile: profileWalm, profileDepth: b });
         }
       }
     } else {

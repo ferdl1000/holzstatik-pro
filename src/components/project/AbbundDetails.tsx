@@ -10,9 +10,11 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { Hammer } from 'lucide-react';
 
+export interface AbbundGeom { buildingWidth: number; overhang: number }
 export interface AbbundDetailsProps {
   member: TimberMember;
   roofPitchDeg: number;
+  geom?: AbbundGeom;
 }
 
 const SVG_W = 800;
@@ -66,14 +68,16 @@ function WoodPattern({ id }: { id: string }) {
 }
 
 // ─── SPARREN-Detail ────────────────────────────────────────────────────────────
-function SparrenDetail({ member, roofPitchDeg }: { member: TimberMember; roofPitchDeg: number }) {
+function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; roofPitchDeg: number; geom?: { buildingWidth: number; overhang: number } }) {
   const b = member.width;     // mm
   const h = member.height;    // mm
   const lengthMM = (member.length || 4) * 1000; // mm
   const alpha = roofPitchDeg;
   const klaueTiefe = Math.min(30, h / 3);
   const klaueBreite = 120; // typische Fußpfetten-Breite
-  const ueberstand = 300;  // mm Dachüberstand am Sparrenkopf
+  // Überstand aus der ECHTEN Projektgeometrie (Plan/Default), entlang der Schräge gemessen
+  const cosAReal = Math.max(Math.cos((alpha * Math.PI) / 180), 0.5);
+  const ueberstand = Math.round(((geom?.overhang ?? 0.3) * 1000) / cosAReal); // mm entlang Schräge
 
   // Maßstab: lengthMM auf ca 600px
   const scale = 600 / lengthMM;
@@ -93,9 +97,17 @@ function SparrenDetail({ member, roofPitchDeg }: { member: TimberMember; roofPit
   const slantT = tPix * tanA;
   const wKerbe = klaueBreite * scale;            // Kervenbreite ≈ Pfettenbreite
   const yT = startY, yB = startY + drawH;
-  // Kervenpositionen entlang der Unterkante (vom linken/Traufen-Ende):
-  const xFuss = startX + ueberstand * scale;               // Fußpfette nach dem Überstand
-  const xMitte = startX + drawLen * 0.55;                  // Mittelpfette
+  // Kervenpositionen entlang der Unterkante aus der ECHTEN Geometrie:
+  // Fußpfette sitzt nach dem Überstand; Mittelpfette auf halber horizontaler
+  // Sparrenweite (halfWidth/2 von der Wand), umgerechnet auf die Schräge.
+  const xFuss = startX + ueberstand * scale;
+  const mitteSlopeMM = geom
+    ? ((geom.buildingWidth / 4) * 1000) / cosAReal
+    : lengthMM * 0.55 - ueberstand;
+  const xMitte = Math.min(
+    startX + (ueberstand + mitteSlopeMM) * scale,
+    startX + drawLen - wKerbe - slant - 20,
+  );
   const kerbe = (xn: number) =>
     `${xn + slantT + wKerbe},${yB} ${xn + wKerbe},${yB - tPix} ${xn + slantT},${yB - tPix} ${xn},${yB}`;
 
@@ -423,8 +435,8 @@ function LeimbinderDetail({ member, roofPitchDeg }: { member: TimberMember; roof
 }
 
 // ─── Hauptkomponente: AbbundDetails (1 Bauteil) ───────────────────────────────
-export function AbbundDetails({ member, roofPitchDeg }: AbbundDetailsProps) {
-  const typeFn: Record<string, (p: { member: TimberMember; roofPitchDeg: number }) => JSX.Element> = {
+export function AbbundDetails({ member, roofPitchDeg, geom }: AbbundDetailsProps) {
+  const typeFn: Record<string, (p: { member: TimberMember; roofPitchDeg: number; geom?: AbbundGeom }) => JSX.Element> = {
     sparren: SparrenDetail,
     nebentraeger: SparrenDetail,
     pfette: PfetteDetail,
@@ -436,16 +448,17 @@ export function AbbundDetails({ member, roofPitchDeg }: AbbundDetailsProps) {
     auswechslung: PfetteDetail,
   };
   const Fn = typeFn[member.type] || PfetteDetail;
-  return <Fn member={member} roofPitchDeg={roofPitchDeg} />;
+  return <Fn member={member} roofPitchDeg={roofPitchDeg} geom={geom} />;
 }
 
 // ─── Übersicht: AbbundOverview (alle Bauteiltypen aus Project.members) ────────
 export interface AbbundOverviewProps {
   members: TimberMember[];
   roofPitchDeg: number;
+  geom?: AbbundGeom;
 }
 
-export function AbbundOverview({ members, roofPitchDeg }: AbbundOverviewProps) {
+export function AbbundOverview({ members, roofPitchDeg, geom }: AbbundOverviewProps) {
   if (!members || members.length === 0) {
     return (
       <Card>
@@ -489,7 +502,7 @@ export function AbbundOverview({ members, roofPitchDeg }: AbbundOverviewProps) {
           </TabsList>
           {grouped.map(g => (
             <TabsContent key={g.type} value={g.type} className="mt-3">
-              <AbbundDetails member={g.member!} roofPitchDeg={roofPitchDeg} />
+              <AbbundDetails member={g.member!} roofPitchDeg={roofPitchDeg} geom={geom} />
               <div className="mt-2 text-xs text-muted-foreground">
                 Vereinfachte Detailansicht für Klassische Holzverbindungen. Konkrete Maße/Verbinder vom Statiker prüfen lassen.
               </div>
