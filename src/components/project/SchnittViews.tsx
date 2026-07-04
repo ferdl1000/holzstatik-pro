@@ -157,56 +157,55 @@ function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: 
         </>
       )}
 
-      {/* Fußpfetten */}
-      <rect x={toSX(xL) - 12} y={toSY(yEaves) - 10} width={28} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-      <rect x={toSX(xR) - 6} y={toSY(yEaves) - 10} width={28} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+      {/* ZIMMERER-LAGE: Pfetten STEHEND (b < h, hochkant) und UNTER der
+          Sparrenlinie — die Sparren ruhen auf ihnen. Mauerbank AUF der
+          Mauerkrone, innenbündig. Größen aus dem echten Pfetten-Querschnitt. */}
+      {(() => {
+        const pfB = Math.max(8, (pfette?.width ?? 100) / 12);   // px, stehend: schmal
+        const pfH = Math.max(14, (pfette?.height ?? 220) / 12); // px, hochkant
+        const ov = 0.4; // Dachüberstand im Schnitt [m]
+        const tanP = isFlach ? 0.03 : (yRidge - yEaves) / Math.max(isPult ? bldW : halfSpan, 0.1);
+        const sw = sparren ? Math.max(2, sparren.height / 40) : 3;
+        return (
+          <g>
+            {/* Mauerbänke: auf der Mauerkrone, innen */}
+            <rect x={toSX(xL) + 2} y={toSY(yEaves) - pfH * 0.7} width={pfB} height={pfH * 0.7} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+            <rect x={toSX(xR) - 2 - pfB} y={toSY(yEaves) - pfH * 0.7} width={pfB} height={pfH * 0.7} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
 
-      {/* Mittelpfetten (nur Satteldach) */}
-      {!isPult && !isFlach && (
-        <>
-          <rect x={toSX(xMidL) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-          <rect x={toSX(xMidR) - 12} y={toSY(yMid) - 10} width={24} height={10} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-        </>
-      )}
+            {/* Mittelpfetten: stehend, Oberkante an der Sparren-Unterseite */}
+            {!isPult && !isFlach && (
+              <>
+                <rect x={toSX(xMidL) - pfB / 2} y={toSY(yMid) + sw / 2} width={pfB} height={pfH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+                <rect x={toSX(xMidR) - pfB / 2} y={toSY(yMid) + sw / 2} width={pfB} height={pfH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+              </>
+            )}
 
-      {isPult ? (
-        /* Pultdach: ein Sparren von links-Traufe bis rechts-First */
-        <line
-          x1={toSX(xL)} y1={toSY(yEaves)}
-          x2={toSX(xR)} y2={toSY(yRidge)}
-          stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-        />
-      ) : isFlach ? (
-        /* Flachdach: horizontale Linie */
-        <line
-          x1={toSX(xL)} y1={toSY(yEaves)}
-          x2={toSX(xR)} y2={toSY(yEaves)}
-          stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-        />
-      ) : (
-        /* Satteldach: beide Seiten */
-        <>
-          <line
-            x1={toSX(xL)} y1={toSY(yEaves)}
-            x2={toSX(xM)} y2={toSY(yRidge)}
-            stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-          />
-          <line
-            x1={toSX(xR)} y1={toSY(yEaves)}
-            x2={toSX(xM)} y2={toSY(yRidge)}
-            stroke="#333" strokeWidth={sparren ? Math.max(2, sparren.height / 40) : 3}
-          />
-        </>
-      )}
+            {/* Firstpfette: stehend, direkt unter dem First */}
+            {!isPult && !isFlach && (
+              <rect x={toSX(xM) - pfB / 2} y={toSY(yRidge) + sw / 2} width={pfB} height={pfH}
+                    fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
+            )}
 
-      {/* Firstpfette (nur Satteldach / Pfettendach) */}
-      {!isPult && !isFlach && (
-        <rect
-          x={toSX(xM) - 14} y={toSY(yRidge) - 12}
-          width={28} height={12}
-          fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2}
-        />
-      )}
+            {/* Sparrenlinien MIT Dachüberstand über die Traufe hinaus */}
+            {isPult ? (
+              <line x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xR + ov)} y2={toSY(yRidge + ov * tanP)}
+                    stroke="#333" strokeWidth={sw} />
+            ) : isFlach ? (
+              <line x1={toSX(xL - ov)} y1={toSY(yEaves)} x2={toSX(xR + ov)} y2={toSY(yEaves)}
+                    stroke="#333" strokeWidth={sw} />
+            ) : (
+              <>
+                <line x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
+                      stroke="#333" strokeWidth={sw} />
+                <line x1={toSX(xR + ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
+                      stroke="#333" strokeWidth={sw} />
+              </>
+            )}
+            {/* Überstand beschriften */}
+            <text x={toSX(xL - ov)} y={toSY(yEaves - ov * tanP) + 14} fontSize={8} fill="#64748b">Überstand</text>
+          </g>
+        );
+      })()}
 
       {/* Aufbau: Lattung + Eindeckung */}
       {!isFlach && (() => {
@@ -229,6 +228,42 @@ function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: 
             </g>
           );
         });
+      })()}
+
+      {/* Kaltdach-Schichtaufbau: nummerierte Parallel-Lagen über der Sparrenlinie + Legende */}
+      {(() => {
+        const layers = [
+          { off: 4, label: '1', color: '#8a5a2b', name: 'Vollschalung 24 mm' },
+          { off: 8, label: '2', color: '#334155', name: 'Abdichtung / Unterdach' },
+          { off: 12, label: '3', color: '#8a5a2b', name: 'Konterlattung 5/8' },
+          { off: 16, label: '4', color: '#8a5a2b', name: 'Lattung 3/5 + Eindeckung' },
+        ];
+        const nx2 = isFlach ? 0 : -Math.sin(pitchRad);
+        const ny2 = isFlach ? 1 : Math.cos(pitchRad);
+        const sX = toSX(xL), sY = toSY(yEaves);
+        const eX = toSX(isPult || isFlach ? xR : xM), eY = toSY(isFlach ? yEaves : yRidge);
+        return (
+          <g>
+            {layers.map((l) => (
+              <line key={l.label}
+                x1={sX + nx2 * l.off} y1={sY - ny2 * l.off}
+                x2={eX + nx2 * l.off} y2={eY - ny2 * l.off}
+                stroke={l.color} strokeWidth={1.4}
+                strokeDasharray={l.label === '2' ? '4 3' : undefined} />
+            ))}
+            {layers.map((l) => (
+              <text key={`t-${l.label}`}
+                x={sX + nx2 * l.off - 10} y={sY - ny2 * l.off + 3}
+                fontSize={7} fill={l.color} fontFamily="monospace">{l.label}</text>
+            ))}
+            <g fontSize={8} fontFamily="monospace" fill="#334155">
+              <text x={pad.l} y={12} fontWeight="bold">Dachaufbau (Kaltdach), auf Sparren:</text>
+              {layers.map((l, i) => (
+                <text key={`leg-${l.label}`} x={pad.l} y={22 + i * 10}>{l.label}  {l.name}</text>
+              ))}
+            </g>
+          </g>
+        );
       })()}
 
       {/* Bemaßungen */}

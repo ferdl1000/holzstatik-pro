@@ -82,8 +82,22 @@ function SparrenDetail({ member, roofPitchDeg }: { member: TimberMember; roofPit
   const startX = 100;
   const startY = 200;
 
-  // Sparrenkopf (vorne, links) — schräger Schnitt im Winkel α
-  const headCut = drawH / Math.tan((alpha * Math.PI) / 180);
+  // ZIMMERER-DARSTELLUNG (Sparren flach liegend, wie beim Anreißen):
+  // Der Balken hat DURCHGEHEND die gleiche Höhe. Es gibt genau:
+  //  - Firstschnitt (Schmiege α) am rechten Ende
+  //  - Zierschnitt (parallele Schmiege) am linken Ende (Traufe)
+  //  - Kerven NUR an der Unterseite: Fußpfette (nach dem Überstand) + Mittelpfette
+  const tanA = Math.tan((alpha * Math.PI) / 180);
+  const slant = drawH * tanA;                    // Schmiegen-Versatz über die Balkenhöhe
+  const tPix = Math.min(h / 4, 40) * scale * 3;  // Kerventiefe ≤ h/4 (gleiche Überhöhung wie drawH)
+  const slantT = tPix * tanA;
+  const wKerbe = klaueBreite * scale;            // Kervenbreite ≈ Pfettenbreite
+  const yT = startY, yB = startY + drawH;
+  // Kervenpositionen entlang der Unterkante (vom linken/Traufen-Ende):
+  const xFuss = startX + ueberstand * scale;               // Fußpfette nach dem Überstand
+  const xMitte = startX + drawLen * 0.55;                  // Mittelpfette
+  const kerbe = (xn: number) =>
+    `${xn + slantT + wKerbe},${yB} ${xn + wKerbe},${yB - tPix} ${xn + slantT},${yB - tPix} ${xn},${yB}`;
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
@@ -92,39 +106,40 @@ function SparrenDetail({ member, roofPitchDeg }: { member: TimberMember; roofPit
         Sparren – {member.name} ({b}/{h} mm, L = {(lengthMM / 1000).toFixed(2)} m, α = {alpha}°)
       </text>
 
-      {/* Sparrenkörper als schräges Rechteck (Seitenansicht horizontal vereinfacht) */}
+      {/* Sparrenkörper: konstante Höhe, Schmiege beidseitig, Kerven unten */}
       <polygon
-        points={`${startX + headCut},${startY} ${startX + drawLen},${startY} ${startX + drawLen - klaueBreite * scale},${startY + drawH} ${startX + drawLen - klaueBreite * scale - klaueTiefe * scale * 3},${startY + drawH} ${startX + drawLen - klaueBreite * scale - klaueTiefe * scale * 3},${startY + drawH - klaueTiefe * scale * 3} ${startX},${startY + drawH - klaueTiefe * scale * 3} ${startX},${startY + drawH * 0.3} ${startX + headCut},${startY + drawH * 0.3}`}
+        points={
+          `${startX},${yT} ` +                                   // oben links (Zierschnitt-Oberkante)
+          `${startX + drawLen - slant},${yT} ` +                 // oben rechts (Firstschmiege beginnt)
+          `${startX + drawLen},${yB} ` +                         // unten rechts (Firstpunkt)
+          `${kerbe(xMitte)} ` +                                  // Kerve Mittelpfette (Unterseite)
+          `${kerbe(xFuss)} ` +                                   // Kerve Fußpfette (Unterseite)
+          `${startX + slant},${yB}`                              // unten links (Zierschnitt-Unterkante)
+        }
         fill="url(#wood-sp)"
         stroke="#333"
         strokeWidth={1.5}
       />
 
-      {/* Sparrenkopf-Schräge markieren */}
-      <line x1={startX} y1={startY} x2={startX + headCut} y2={startY} stroke="#333" strokeWidth={1.5} />
-      <text x={startX - 5} y={startY - 8} fontSize={11} fill="#dc2626" textAnchor="end">Sparrenkopf-Schmiege α={alpha}°</text>
-
-      {/* Klaue an Fußpfette markieren */}
-      <text x={startX + drawLen - klaueBreite * scale - klaueTiefe * scale * 3 - 5} y={startY + drawH + 18} fontSize={11} fill="#dc2626" textAnchor="end">
-        Klaue (Fußpfette) t = {Math.round(klaueTiefe)} mm
+      {/* Schnitte beschriften */}
+      <text x={startX + drawLen + 6} y={yT + drawH / 2} fontSize={11} fill="#dc2626">Firstschnitt (Schmiege α={alpha}°)</text>
+      <text x={startX - 5} y={yT - 8} fontSize={11} fill="#dc2626" textAnchor="end">Zierschnitt Traufe</text>
+      <text x={xFuss + wKerbe / 2} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+        Kerve Fußpfette t = {Math.round(Math.min(h / 4, 40))} mm
       </text>
-
-      {/* Ausklinkung an Mittelpfette in der Mitte */}
-      <rect x={startX + drawLen * 0.45} y={startY + drawH - 15} width={70} height={15}
-            fill="none" stroke="#0891b2" strokeWidth={1.5} strokeDasharray="4 2" />
-      <text x={startX + drawLen * 0.45 + 35} y={startY + drawH + 30} fontSize={11} fill="#0891b2" textAnchor="middle">
-        Ausklinkung Mittelpfette
+      <text x={xMitte + wKerbe / 2} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+        Kerve Mittelpfette
       </text>
 
       {/* Bemaßung: Gesamtlänge (Schräglänge) */}
       <Dim x1={startX} y1={startY - 50} x2={startX + drawLen} y2={startY - 50}
            label={`Schräglänge ${fmt(lengthMM)}`} side="top" />
       {/* Bemaßung: Sparrenhöhe rechts */}
-      <Dim x1={startX + drawLen + 30} y1={startY} x2={startX + drawLen + 30} y2={startY + drawH}
+      <Dim x1={startX + drawLen + 30} y1={yT} x2={startX + drawLen + 30} y2={yB}
            label={`h = ${h} mm`} side="right" />
-      {/* Bemaßung: Sparrenkopf-Überstand */}
-      <Dim x1={startX + headCut} y1={startY + drawH + 50} x2={startX + headCut + ueberstand * scale}
-           y2={startY + drawH + 50} label={`Überstand ${ueberstand} mm`} side="bottom" />
+      {/* Bemaßung: Überstand bis zur Fußpfetten-Kerve */}
+      <Dim x1={startX} y1={yB + 50} x2={xFuss}
+           y2={yB + 50} label={`Überstand ${ueberstand} mm`} side="bottom" />
 
       {/* Querschnitt-Skizze rechts oben */}
       <g transform={`translate(${SVG_W - 130}, 60)`}>

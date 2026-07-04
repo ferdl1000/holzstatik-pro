@@ -230,26 +230,37 @@ function buildPartBoxes(
               dims: [b, h, sLen], color, profile, profileDepth: b });
       }
     } else if (isFlachdach) {
+      // Flachdach: durchgehender Sparren mit leichtem Gefälle, Kerven auf beiden
+      // Mauerbänken, lotrechte Enden mit Zierschnitt.
       const spacing = length / qty;
-      const flatPitch = 0.03; // 3° Gefälle
-      const flatY = eavesHeight; // flachdach: Sparren auf Traufhöhe
+      const flatTan = 0.03;
+      const hVFlat = h;
+      const kervenFlat: number[] = fussPfetten.length > 0 ? [-(halfWidth - 0.09), halfWidth - 0.09] : [];
+      const profileFlat = sparrenProfil(-halfWidth - 0.3, halfWidth + 0.3, eavesHeight + hVFlat, flatTan, hVFlat, kervenFlat);
       for (let i = 0; i < qty; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         add({ key: `${partId}-spr-${sm.id}-${i}`, memberId: sm.id, memberName: sm.name,
-              pos: [x, flatY, 0], rot: [flatPitch, 0, 0],
-              dims: [b, h, width], color });
+              pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
+              dims: [b, h, width], color, profile: profileFlat, profileDepth: b });
       }
     } else if (isWalm) {
-      // Walm: Sparren auf 4 Seiten. Längsseiten und Walmsparren an den Enden
+      // Walm: Längsseiten mit echtem Zimmerer-Profil (wie Satteldach), an den
+      // Enden vereinfachte Schifter (Detail-Schifterschnitte: siehe Abbundliste).
       const perLongSide = Math.ceil(qty * 0.7 / 2);  // 70% auf Längsseiten
       const longSpacing = length / perLongSide;
       const midY = (eavesHeight + ridgeHeight) / 2;
+      const hVW = h / Math.max(Math.cos(angle), 0.5);
+      const kervenW: number[] = [];
+      if (fussPfetten.length > 0) kervenW.push(halfWidth - 0.09);
+      const midListW = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
+      if (midListW.length > 0) kervenW.push(halfWidth / 2 + ((midListW[0]?.width ?? 100) / 2000));
       for (let i = 0; i < perLongSide; i++) {
         const x = -length / 2 + (i + 0.5) * longSpacing;
         for (const side of [-1, 1] as const) {
+          const profileW = sparrenProfil(0, side * (halfWidth + 0.25), ridgeHeight, rise / halfWidth, hVW, kervenW.map(z => side * z));
           add({ key: `${partId}-spr-${sm.id}-long-${i}-${side}`, memberId: sm.id, memberName: sm.name,
-                pos: [x, midY, side * halfWidth / 2], rot: [side * angle, 0, 0],
-                dims: [b, h, sparrenLen], color });
+                pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
+                dims: [b, h, sparrenLen], color, profile: profileW, profileDepth: b });
         }
       }
       // Walm: kurze Sparren an Giebelseiten in 45° Richtung
