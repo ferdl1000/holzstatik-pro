@@ -61,9 +61,11 @@ export function PlanTab({ project, projectId, onAnalysisComplete }: PlanTabProps
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // Bug A fix: load existing documents on mount
+  // Bug A fix: load existing documents on mount.
+  // Ohne projectId (Projekt nicht gefunden/gespeichert) den Spinner beenden,
+  // sonst steht ewig "Dokumente werden geladen…" ohne Erklärung.
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) { setLoadingDocs(false); return; }
     loadDocuments();
   }, [projectId]);
 

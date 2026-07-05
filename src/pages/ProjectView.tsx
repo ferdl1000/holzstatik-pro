@@ -65,9 +65,12 @@ const ProjectView = () => {
     loadProject();
   }, [id]);
 
+  const [notFound, setNotFound] = useState(false);
+
   async function loadProject() {
     setLoading(true);
     const { data } = await supabase.from('projects').select('*').eq('id', id).single();
+    if (!data) setNotFound(true);
     if (data) {
       setDbProject(data);
       const pd = (data.project_data as any) || {};
@@ -135,6 +138,28 @@ const ProjectView = () => {
       <AppLayout>
         <div className="flex items-center justify-center h-64">
           <div className="animate-pulse text-muted-foreground">Projekt ladenâ€¦</div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  // Projekt existiert nicht (mehr) — z.B. gelöscht, während der Tab offen war.
+  // Vorher blieb die Seite hier in einer endlosen "Dokumente werden geladen…"-
+  // Anzeige hängen, ohne dem Nutzer zu sagen, was los ist.
+  if (notFound) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center h-64 gap-4">
+          <ShieldAlert className="h-10 w-10 text-[hsl(var(--status-yellow))]" />
+          <div className="text-center">
+            <p className="font-semibold">Projekt nicht gefunden</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Dieses Projekt existiert nicht mehr — vermutlich wurde es gelöscht.
+            </p>
+          </div>
+          <Link to="/" className="text-sm text-primary underline underline-offset-2">
+            Zurück zur Projektübersicht
+          </Link>
         </div>
       </AppLayout>
     );
