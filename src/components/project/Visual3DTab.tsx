@@ -62,7 +62,7 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
         roofParts={roofParts}
         utilizations={utilizations}
       />
-      <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} geom={{ buildingWidth: g.width.value || 8, overhang: project.roofOverhang ?? 0.4 }} />
+      <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} geom={{ buildingWidth: g.width.value || 8, overhang: project.roofOverhang ?? 0.4, hasMittelpfette: (project.members ?? []).some(m => m.type === 'pfette' && /mittel/i.test(m.name)) }} />
       <div className="mt-4">
         <SchnittViews
           geometry={g}

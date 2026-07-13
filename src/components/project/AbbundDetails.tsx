@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { Hammer } from 'lucide-react';
 
-export interface AbbundGeom { buildingWidth: number; overhang: number }
+export interface AbbundGeom { buildingWidth: number; overhang: number; hasMittelpfette?: boolean }
 export interface AbbundDetailsProps {
   member: TimberMember;
   roofPitchDeg: number;
@@ -68,7 +68,7 @@ function WoodPattern({ id }: { id: string }) {
 }
 
 // ─── SPARREN-Detail ────────────────────────────────────────────────────────────
-function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; roofPitchDeg: number; geom?: { buildingWidth: number; overhang: number } }) {
+function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; roofPitchDeg: number; geom?: AbbundGeom }) {
   const b = member.width;     // mm
   const h = member.height;    // mm
   const lengthMM = (member.length || 4) * 1000; // mm
@@ -87,29 +87,30 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
   const startY = 200;
 
   // ZIMMERER-DARSTELLUNG (Sparren flach liegend, wie beim Anreißen):
-  // Der Balken hat DURCHGEHEND die gleiche Höhe. Es gibt genau:
-  //  - Firstschnitt (Schmiege α) am rechten Ende
-  //  - Zierschnitt (parallele Schmiege) am linken Ende (Traufe)
-  //  - Kerven NUR an der Unterseite: Fußpfette (nach dem Überstand) + Mittelpfette
-  const tanA = Math.tan((alpha * Math.PI) / 180);
+  // Der Balken hat DURCHGEHEND die gleiche Höhe. First liegt RECHTS. Alle
+  // lotrechten Anrisse (Firstschnitt, Zierschnitt, Kerven-Stoß) sind PARALLEL
+  // und neigen sich oben BERGWÄRTS (nach rechts) — am First erreicht die
+  // OBERKANTE den Firstpunkt, die Unterkante endet um h·tanα früher.
+  const tanA = Math.max(Math.tan((alpha * Math.PI) / 180), 0.09);
   const slant = drawH * tanA;                    // Schmiegen-Versatz über die Balkenhöhe
   const tPix = Math.min(h / 4, 40) * scale * 3;  // Kerventiefe ≤ h/4 (gleiche Überhöhung wie drawH)
-  const slantT = tPix * tanA;
-  const wKerbe = klaueBreite * scale;            // Kervenbreite ≈ Pfettenbreite
+  const slantT = tPix * tanA;                    // Stoß-Versatz über die Kerventiefe
+  const sohleLen = tPix / tanA;                  // Sohlen-Auslauf: waagrecht verbaut → fällt im Anriss um tanα
   const yT = startY, yB = startY + drawH;
-  // Kervenpositionen entlang der Unterkante aus der ECHTEN Geometrie:
-  // Fußpfette sitzt nach dem Überstand; Mittelpfette auf halber horizontaler
-  // Sparrenweite (halfWidth/2 von der Wand), umgerechnet auf die Schräge.
+  // Kervenpositionen (Stoß-Fußpunkt) entlang der Unterkante aus der ECHTEN
+  // Geometrie: Fußpfette nach dem Überstand; Mittelpfette (falls vorhanden)
+  // auf halber horizontaler Sparrenweite, umgerechnet auf die Schräge.
   const xFuss = startX + ueberstand * scale;
-  const mitteSlopeMM = geom
-    ? ((geom.buildingWidth / 4) * 1000) / cosAReal
-    : lengthMM * 0.55 - ueberstand;
+  const hatMittelpfette = geom?.hasMittelpfette ?? false;
+  const mitteSlopeMM = ((geom?.buildingWidth ?? 8) / 4) * 1000 / cosAReal;
   const xMitte = Math.min(
     startX + (ueberstand + mitteSlopeMM) * scale,
-    startX + drawLen - wKerbe - slant - 20,
+    startX + drawLen - slant - sohleLen - 30,
   );
-  const kerbe = (xn: number) =>
-    `${xn + slantT + wKerbe},${yB} ${xn + wKerbe},${yB - tPix} ${xn + slantT},${yB - tPix} ${xn},${yB}`;
+  // Kerve im Anriss (Traversal der Unterkante von rechts nach links):
+  // Stoß-Fuß → lotrechter Stoß hoch (oben bergwärts) → Sohle läuft talwärts in die Unterkante aus
+  const kerbe = (xStoss: number) =>
+    `${xStoss},${yB} ${xStoss + slantT},${yB - tPix} ${xStoss + slantT - sohleLen},${yB}`;
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
@@ -118,43 +119,45 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
         Sparren – {member.name} ({b}/{h} mm, L = {(lengthMM / 1000).toFixed(2)} m, α = {alpha}°)
       </text>
 
-      {/* Sparrenkörper: konstante Höhe, Schmiege beidseitig, Kerven unten */}
+      {/* Sparrenkörper: konstante Höhe, parallele Schmiegen, Kerven unten */}
       <polygon
         points={
-          `${startX},${yT} ` +                                   // oben links (Zierschnitt-Oberkante)
-          `${startX + drawLen - slant},${yT} ` +                 // oben rechts (Firstschmiege beginnt)
-          `${startX + drawLen},${yB} ` +                         // unten rechts (Firstpunkt)
-          `${kerbe(xMitte)} ` +                                  // Kerve Mittelpfette (Unterseite)
-          `${kerbe(xFuss)} ` +                                   // Kerve Fußpfette (Unterseite)
-          `${startX + slant},${yB}`                              // unten links (Zierschnitt-Unterkante)
+          `${startX + slant},${yT} ` +                           // oben links (Zierschnitt-Kopf)
+          `${startX + drawLen},${yT} ` +                         // oben rechts = FIRSTPUNKT (Oberkante erreicht den First)
+          `${startX + drawLen - slant},${yB} ` +                 // unten rechts (Firstschnitt-Fuß, um h·tanα zurück)
+          (hatMittelpfette ? `${kerbe(xMitte)} ` : '') +         // Kerve Mittelpfette (nur wenn statisch vorhanden)
+          `${kerbe(xFuss)} ` +                                   // Kerve Fußpfette (Mauerbank)
+          `${startX},${yB}`                                      // unten links (Zierschnitt-Fuß, Unterkante ragt talwärts vor)
         }
         fill="url(#wood-sp)"
         stroke="#333"
         strokeWidth={1.5}
       />
 
-      {/* Schnitte beschriften */}
-      <text x={startX + drawLen + 6} y={yT + drawH / 2} fontSize={11} fill="#dc2626">Firstschnitt (Schmiege α={alpha}°)</text>
-      <text x={startX - 5} y={yT - 8} fontSize={11} fill="#dc2626" textAnchor="end">Zierschnitt Traufe</text>
-      <text x={xFuss + wKerbe / 2} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+      {/* Schnitte beschriften (kollisionsfrei: oben links/rechts, Kerven unten) */}
+      <text x={startX + drawLen} y={yT - 8} fontSize={11} fill="#dc2626" textAnchor="end">Firstschnitt (Schmiege α={alpha}°)</text>
+      <text x={startX + slant + 4} y={yT - 8} fontSize={11} fill="#dc2626">Zierschnitt Traufe</text>
+      <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
         Kerve Fußpfette t = {Math.round(Math.min(h / 4, 40))} mm
       </text>
-      <text x={xMitte + wKerbe / 2} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-        Kerve Mittelpfette
-      </text>
+      {hatMittelpfette && (
+        <text x={xMitte} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+          Kerve Mittelpfette
+        </text>
+      )}
 
       {/* Bemaßung: Gesamtlänge (Schräglänge) */}
       <Dim x1={startX} y1={startY - 50} x2={startX + drawLen} y2={startY - 50}
            label={`Schräglänge ${fmt(lengthMM)}`} side="top" />
-      {/* Bemaßung: Sparrenhöhe rechts */}
-      <Dim x1={startX + drawLen + 30} y1={yT} x2={startX + drawLen + 30} y2={yB}
+      {/* Bemaßung: Sparrenhöhe rechts (unterhalb des Firstschnitt-Labels) */}
+      <Dim x1={startX + drawLen + 35} y1={yT} x2={startX + drawLen + 35} y2={yB}
            label={`h = ${h} mm`} side="right" />
       {/* Bemaßung: Überstand bis zur Fußpfetten-Kerve */}
       <Dim x1={startX} y1={yB + 50} x2={xFuss}
            y2={yB + 50} label={`Überstand ${ueberstand} mm`} side="bottom" />
 
       {/* Querschnitt-Skizze rechts oben */}
-      <g transform={`translate(${SVG_W - 130}, 60)`}>
+      <g transform={`translate(${SVG_W - 120}, 42)`}>
         <text x={50} y={-5} fontSize={11} fontWeight="bold" textAnchor="middle">Querschnitt</text>
         <rect x={0} y={0} width={50} height={80} fill="url(#wood-sp)" stroke="#333" strokeWidth={1.2} />
         <text x={25} y={95} fontSize={10} textAnchor="middle">{b} mm</text>

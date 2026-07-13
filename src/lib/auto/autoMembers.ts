@@ -332,6 +332,61 @@ export function autoGenerateMembers(
     });
   }
 
+  // ── Mauerbank (Fußpfette): gehört zu JEDEM klassischen Dachstuhl ──────────
+  // Liegt auf der Mauerkrone, nimmt die Sparrenfüße (Kerve) auf und wird mit
+  // der Mauer verankert. Beidseitig über die volle Gebäudelänge.
+  members.push(makeMember({
+    idPrefix: 'MB',
+    name: 'Fußpfette (Mauerbank) 1-2',
+    type: 'pfette',
+    material: 'C24',
+    width: 140,
+    height: 100,
+    length: buildingLength,
+    quantity: 2,
+    crossSection: '14/10',
+  }));
+  assumptions.push({
+    field: 'mauerbank',
+    value: '14/10 C24, 2 Stk',
+    reason: 'Mauerbank (Fußpfette) 14/10 cm beidseitig auf der Mauerkrone — Auflager der Sparrenfüße, mit Sturmanker zu verankern.',
+    source: 'standard',
+  });
+
+  // ── Zangen: halten den Dachstuhl in Querrichtung zusammen ────────────────
+  // Sparrendach: Zangenpaar unten (Deckenniveau) an jedem 2. Gespärre.
+  // Pfettendach mit Mittelpfette: Zangenpaar auf Mittelpfettenhöhe, klemmt
+  // Sparren + Mittelpfette (übliche Oststeiermark-Bauweise).
+  // Zangen brauchen Gespärre-PAARE — beim Pult-/Flachdach gibt es keine
+  // gegenüberliegenden Sparren, dort entfallen sie.
+  const hasGespaerre = !isPultdachForm && _roofType.form !== 'flachdach';
+  if (hasGespaerre && (sysType === 'sparrendach' || sysType === 'pfettendach_mittelpfette')) {
+    const gespaerreCount = Math.ceil(buildingLength / spacing);
+    const zangenPaare = Math.max(2, Math.ceil(gespaerreCount / 2));
+    const zangenLen = sysType === 'sparrendach'
+      ? +(buildingWidth - 0.6).toFixed(2)
+      : +(buildingWidth * 0.55).toFixed(2);
+    members.push(makeMember({
+      idPrefix: 'ZG',
+      name: `Zangen Z1-Z${zangenPaare * 2} (paarweise)`,
+      type: 'zange',
+      material: 'C24',
+      width: 60,
+      height: 160,
+      length: Math.max(zangenLen, 1.0),
+      quantity: zangenPaare * 2,
+      crossSection: '6/16',
+    }));
+    assumptions.push({
+      field: 'zangen',
+      value: `${zangenPaare} Paar 6/16`,
+      reason: sysType === 'sparrendach'
+        ? `Sparrendach: ${zangenPaare} Zangenpaare 6/16 cm auf Deckenniveau (jedes 2. Gespärre) — nehmen den Horizontalschub auf.`
+        : `${zangenPaare} Zangenpaare 6/16 cm auf Mittelpfettenhöhe (jedes 2. Gespärre) — klemmen Sparren + Mittelpfette, halten den Dachstuhl zusammen.`,
+      source: 'standard',
+    });
+  }
+
   // ── Tragsystem-spezifische Zusatzbauteile ────────────────────────────────
 
   if (sysType === 'kehlbalkendach') {

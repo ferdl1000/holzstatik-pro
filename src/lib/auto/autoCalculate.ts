@@ -50,7 +50,10 @@ function isGlulamMaterial(material: string): boolean {
 }
 
 /** Gibt die Trägerstützweite in Metern zurück (Fallback auf geometrie-basierte Schätzung). */
-function resolveSpan(member: TimberMember, geometry: BuildingGeometry, supportSpacing = 4.0): number {
+function resolveSpan(
+  member: TimberMember, geometry: BuildingGeometry, supportSpacing = 4.0,
+  opts?: { kehlFactor?: number },
+): number {
   // Pfetten: member.length ist die Gesamtlänge der Pfette (= Gebäudelänge),
   // NICHT die statische Stützweite. Stützweite = Stützenabstand ≈ Gebäudelänge / Feldanzahl.
   // supportSpacing ist im Tragwerk-Tab konfigurierbar (Default 4.0 m) — ein kleinerer
@@ -60,11 +63,25 @@ function resolveSpan(member: TimberMember, geometry: BuildingGeometry, supportSp
     const numBays = Math.max(1, Math.ceil(buildingLen / supportSpacing));
     return +(buildingLen / numBays).toFixed(2);
   }
+  // Sparren: die STATISCHE Stützweite ist der Abstand Mauerbank↔First aus der
+  // Geometrie — NICHT member.length, denn das enthält den Dachüberstand
+  // (Kragarm, entlastet das Feld). Kehlbalken/Zangen wirken als Zwischen-
+  // stützung → wirksame Stützweite × kehlFactor (klassische Vorbemessung).
+  if (member.type === 'sparren' || member.type === 'nebentraeger') {
+    const halfWidth = (geometry.width?.value ?? 8) / 2;
+    const rise = Math.max(0.1, (geometry.ridgeHeight?.value ?? 6) - (geometry.eavesHeight?.value ?? 4));
+    const geomSlope = Math.sqrt(halfWidth * halfWidth + rise * rise);
+    // Sattel: Geometrie-Schräge (halbe Breite). Pultdach-Sparren sind länger
+    // (volle Breite) — dort member.length abzüglich ~1 m Überstände (beide Enden).
+    const span = member.length > 0
+      ? Math.min(member.length, Math.max(geomSlope, member.length - 1.0))
+      : geomSlope;
+    return +(span * (opts?.kehlFactor ?? 1)).toFixed(2);
+  }
   if (member.length > 0) return member.length;
   // Fallback aus Geometrie
   const halfWidth = (geometry.width?.value ?? 8) / 2;
   switch (member.type) {
-    case 'sparren':    return Math.round((halfWidth / Math.cos(((geometry.roofPitch?.value ?? 35) * Math.PI) / 180)) * 10) / 10;
     case 'pfette':     return geometry.length?.value ?? 4;
     case 'kehlbalken': return halfWidth * 0.6;
     case 'leimbinder': return geometry.width?.value ?? 8;
@@ -162,9 +179,24 @@ export function autoCalculateAllMembers(
     source: 'standard',
   });
 
+  // Kehlbalken/Zangen stützen den Sparren quer → wirksame Biege-Stützweite
+  // reduziert (klassische Vorbemessung: Kehlbalken ≈ Zwischenauflager, Faktor
+  // 0,7; Zangenpaar etwas schwächer, Faktor 0,85).
+  const hasKehl = members.some(m => m.type === 'kehlbalken');
+  const hasZange = members.some(m => m.type === 'zange');
+  const kehlFactor = hasKehl ? 0.7 : hasZange ? 0.85 : 1;
+  if (kehlFactor < 1) {
+    assumptions.push({
+      field: 'sparren.stuetzweite',
+      value: `× ${kehlFactor}`,
+      reason: `${hasKehl ? 'Kehlbalken' : 'Zangen'} wirken als Zwischenstützung der Sparren → wirksame Biege-Stützweite × ${kehlFactor} (Vorbemessung).`,
+      source: 'standard',
+    });
+  }
+
   for (const member of members) {
     try {
-      const span = resolveSpan(member, geometry, supportSpacing);
+      const span = resolveSpan(member, geometry, supportSpacing, { kehlFactor });
       const useGlulam = isGlulamMaterial(member.material) || member.type === 'leimbinder';
       const timberClass = parseTimberClass(member.material, useGlulam);
 
@@ -232,7 +264,22 @@ export function autoCalculateAllMembers(
           });
           break;
         }
-        case 'zange':
+        case 'zange': {
+          // Zangen sind ZUG-/Aussteifungsglieder — sie tragen KEINE Dachfläche.
+          // Als Biegeträger über die volle Länge gerechnet würden sie absurd
+          // groß (und teuer) dimensioniert. Ansatz: nur Eigengewicht + kleine
+          // Montagelast, Stützweite = halbe Zangenlänge (durch Gegenzange/
+          // Sparren gehalten). Der Zugnachweis ist für 6/16 C24 unkritisch.
+          qg = 0.15; // kN/m Eigengewicht + Zuschlag
+          qs = 0.1;
+          assumptions.push({
+            field: `${member.name}.last`,
+            value: 'Zugglied',
+            reason: 'Zange: Zug-/Aussteifungsglied ohne Dachflächenlast — nur Eigengewicht angesetzt, Querschnitt 6/16 konstruktiv (Zugnachweis unkritisch).',
+            source: 'standard',
+          });
+          break;
+        }
         case 'rahm':
         case 'auswechslung':
         case 'nebentraeger': {

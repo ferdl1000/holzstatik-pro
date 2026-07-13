@@ -201,6 +201,7 @@ function buildPartBoxes(
     !firstPfetten.includes(m) && !mittelPfetten.includes(m) && !fussPfetten.includes(m));
   const stuetzenList = members.filter(m => m.type === 'stuetze');
   const kehlbalkenList = members.filter(m => m.type === 'kehlbalken');
+  const zangenList = members.filter(m => m.type === 'zange');
   const leimbinderList = members.filter(m => m.type === 'leimbinder');
   const kopfbandList = members.filter(m => m.type === 'rahm');
 
@@ -394,6 +395,28 @@ function buildPartBoxes(
         add({ key: `${partId}-deck-${side}`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
               pos: [0, midY + liftUp, side * halfWidth / 2], rot: [side * angle, 0, 0],
               dims: [length, deckThick, sparrenLen], opacity: 0.45, transparent: true });
+      }
+    }
+  }
+
+  // === Zangen: paarweise beidseitig der Sparren, waagrecht ===
+  // Sparrendach: auf Deckenniveau (knapp über der Traufe). Pfettendach mit
+  // Mittelpfette: auf Mittelpfettenhöhe — sie klemmen Sparren + Pfette.
+  for (const zg of zangenList) {
+    const paare = Math.max(1, Math.floor(zg.quantity / 2));
+    const zgSpacing = length / paare;
+    const zgY = midPfetten.length > 0
+      ? (midPfettenY ?? midY) + 0.02
+      : eavesHeight + 0.15;
+    const zgB = zg.width / 1000, zgH = zg.height / 1000;
+    const sparB = (sparrenList[0]?.width ?? 80) / 1000;
+    const color = utilizationColor(utilizations[zg.id]);
+    for (let i = 0; i < paare; i++) {
+      const x = -length / 2 + (i + 0.5) * zgSpacing;
+      for (const zside of [-1, 1] as const) {
+        add({ key: `${partId}-zg-${zg.id}-${i}-${zside}`, memberId: zg.id, memberName: zg.name,
+              pos: [x + zside * (sparB / 2 + zgB / 2 + 0.005), zgY, 0], rot: [0, 0, 0],
+              dims: [zgB, zgH, zg.length || width * 0.55], color });
       }
     }
   }

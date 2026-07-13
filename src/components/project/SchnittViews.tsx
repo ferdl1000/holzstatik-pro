@@ -149,8 +149,9 @@ function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: 
       <rect x={toSX(xL) - 12} y={toSY(yEaves)} width={12} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
       <rect x={toSX(xR)} y={toSY(yEaves)} width={12} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
 
-      {/* Stützen unter Mittelpfetten (nur Satteldach) */}
-      {!isPult && !isFlach && (
+      {/* Tragende Innenwände/Auflager unter den Mittelpfetten — NUR wenn die
+          Statik Mittelpfetten vorsieht (beim Sparren-/Kehlbalkendach entfällt beides) */}
+      {!isPult && !isFlach && members.some(m => m.type === 'pfette' && /mittel/i.test(m.name)) && (
         <>
           <rect x={toSX(xMidL) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
           <rect x={toSX(xMidR) - 6} y={toSY(yMid)} width={12} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
@@ -166,25 +167,46 @@ function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: 
         const ov = 0.4; // Dachüberstand im Schnitt [m]
         const tanP = isFlach ? 0.03 : (yRidge - yEaves) / Math.max(isPult ? bldW : halfSpan, 0.1);
         const sw = sparren ? Math.max(2, sparren.height / 40) : 3;
+        // NUR zeichnen, was die Statik wirklich vorsieht — beim Sparrendach gibt
+        // es KEINE First-/Mittelpfetten (die Zeichnung folgt der Bauteilliste).
+        const hasFirst = members.some(m => m.type === 'pfette' && /first/i.test(m.name));
+        const hasMittel = members.some(m => m.type === 'pfette' && /mittel/i.test(m.name));
+        const zange = members.find(m => m.type === 'zange');
+        const kehl = members.find(m => m.type === 'kehlbalken');
         return (
           <g>
-            {/* Mauerbänke: auf der Mauerkrone, innen */}
-            <rect x={toSX(xL) + 2} y={toSY(yEaves) - pfH * 0.7} width={pfB} height={pfH * 0.7} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-            <rect x={toSX(xR) - 2 - pfB} y={toSY(yEaves) - pfH * 0.7} width={pfB} height={pfH * 0.7} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+            {/* Mauerbänke: liegen AUF der Mauerkrone, UNTER dem Sparren (Kerve) */}
+            <rect x={toSX(xL) + 2} y={toSY(yEaves)} width={pfB * 1.4} height={pfH * 0.55} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+            <rect x={toSX(xR) - 2 - pfB * 1.4} y={toSY(yEaves)} width={pfB * 1.4} height={pfH * 0.55} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
 
-            {/* Mittelpfetten: stehend, Oberkante an der Sparren-Unterseite */}
-            {!isPult && !isFlach && (
+            {/* Mittelpfetten: nur wenn statisch vorhanden, stehend unter der Sparrenlage */}
+            {hasMittel && !isPult && !isFlach && (
               <>
                 <rect x={toSX(xMidL) - pfB / 2} y={toSY(yMid) + sw / 2} width={pfB} height={pfH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
                 <rect x={toSX(xMidR) - pfB / 2} y={toSY(yMid) + sw / 2} width={pfB} height={pfH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
               </>
             )}
 
-            {/* Firstpfette: stehend, direkt unter dem First */}
-            {!isPult && !isFlach && (
+            {/* Firstpfette: nur wenn statisch vorhanden */}
+            {hasFirst && !isPult && !isFlach && (
               <rect x={toSX(xM) - pfB / 2} y={toSY(yRidge) + sw / 2} width={pfB} height={pfH}
                     fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
             )}
+
+            {/* Zange/Kehlbalken: waagrechtes Holz, hält das Gespärre zusammen */}
+            {(zange || kehl) && !isPult && !isFlach && (() => {
+              const zy = kehl ? yEaves + (yRidge - yEaves) * 0.6 : (hasMittel ? yMid : yEaves + 0.3);
+              const zHalf = (yRidge - zy) / Math.max(tanP, 0.1); // wo die Zange die Sparren trifft
+              return (
+                <g>
+                  <line x1={toSX(xM - zHalf)} y1={toSY(zy)} x2={toSX(xM + zHalf)} y2={toSY(zy)}
+                        stroke="#8a5a2b" strokeWidth={3} />
+                  <text x={toSX(xM)} y={toSY(zy) - 5} fontSize={8} fill="#8a5a2b" textAnchor="middle">
+                    {kehl ? 'Kehlbalken' : 'Zange (paarweise)'}
+                  </text>
+                </g>
+              );
+            })()}
 
             {/* Sparrenlinien MIT Dachüberstand über die Traufe hinaus */}
             {isPult ? (
@@ -314,12 +336,12 @@ function Querschnitt({ geometry, members, coveringName, roofForm }: { geometry: 
         );
       })()}
 
-      {/* Labels */}
-      {!isPult && !isFlach && (
-        <>
-          <text x={toSX(xM)} y={toSY(yRidge) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
-          <text x={toSX(xMidL)} y={toSY(yMid) + 22} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfette</text>
-        </>
+      {/* Labels — nur für Bauteile, die es laut Statik wirklich gibt */}
+      {!isPult && !isFlach && members.some(m => m.type === 'pfette' && /first/i.test(m.name)) && (
+        <text x={toSX(xM)} y={toSY(yRidge) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
+      )}
+      {!isPult && !isFlach && members.some(m => m.type === 'pfette' && /mittel/i.test(m.name)) && (
+        <text x={toSX(xMidL)} y={toSY(yMid) + 22} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfette</text>
       )}
       {isPult && (
         <text x={toSX(xM)} y={toSY((yEaves + yRidge) / 2) - 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Pultdach-Sparren</text>
@@ -359,14 +381,24 @@ function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; memb
   const toSX = (mx: number) => pad.l + mx * scaleX;
   const toSY = (my: number) => pad.t + drawH - my * scaleY;
 
-  // Stützenpositionen
-  const stuetzCount = Math.max(2, Math.floor(bldL / stuetzAbstand) + 1);
-  const stuetzPositions: number[] = Array.from({ length: stuetzCount }, (_, i) =>
-    (i / (stuetzCount - 1)) * bldL
+  // Die Zeichnung folgt der BAUTEILLISTE — was die Statik nicht vorsieht,
+  // wird auch nicht gezeichnet (z.B. keine Pfetten beim Sparren-/Kehlbalkendach).
+  const hasFirst = members.some(m => m.type === 'pfette' && /first/i.test(m.name));
+  const hasMittel = members.some(m => m.type === 'pfette' && /mittel/i.test(m.name));
+  const zange = members.find(m => m.type === 'zange');
+  const kehl = members.find(m => m.type === 'kehlbalken');
+  const stuetzenQty = members.filter(m => m.type === 'stuetze')
+    .reduce((s, m) => s + Math.max(1, m.quantity), 0);
+
+  // Stützenpositionen: ECHTE Anzahl aus der Bauteilliste, gleichmäßig verteilt
+  // (0 Stützen = Pfetten lagern nur auf den Giebelwänden)
+  const innerStuetzen = Math.min(stuetzenQty, Math.max(0, Math.floor(bldL / stuetzAbstand) - 1));
+  const stuetzPositions: number[] = Array.from({ length: innerStuetzen }, (_, i) =>
+    ((i + 1) / (innerStuetzen + 1)) * bldL
   );
 
-  const midH = (ridgeH + eavesH) / 2; // Mittelpfette Höhe (vereinfacht)
-  const midH2 = eavesH + (ridgeH - eavesH) * 0.45;
+  const midH2 = eavesH + (ridgeH - eavesH) * 0.45; // Mittelpfetten-Höhe (beide liegen im Längsschnitt hintereinander → EIN Band)
+  const zangenH = kehl ? eavesH + (ridgeH - eavesH) * 0.6 : (hasMittel ? midH2 : eavesH + 0.3);
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
@@ -379,24 +411,37 @@ function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; memb
       <rect x={toSX(0) - 14} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
       <rect x={toSX(bldL)} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
 
-      {/* Stützen */}
-      {stuetzPositions.map((sx, i) => (
+      {/* Stützen (nur die tatsächlich generierten Lastverteilungs-Steher) */}
+      {(hasFirst || hasMittel) && stuetzPositions.map((sx, i) => (
         <rect
           key={i}
-          x={toSX(sx) - 5} y={toSY(midH2)}
-          width={10} height={toSY(0) - toSY(midH2)}
+          x={toSX(sx) - 5} y={toSY(hasMittel ? midH2 : ridgeH)}
+          width={10} height={toSY(0) - toSY(hasMittel ? midH2 : ridgeH)}
           fill="url(#ls-wood)" stroke="#333" strokeWidth={1}
         />
       ))}
 
-      {/* Firstpfette */}
-      <rect x={toSX(0)} y={toSY(ridgeH) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
+      {/* Firstpfette: nur wenn statisch vorhanden */}
+      {hasFirst && (
+        <rect x={toSX(0)} y={toSY(ridgeH) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
+      )}
 
-      {/* Mittelpfetten (2 Stück) */}
-      <rect x={toSX(0)} y={toSY(midH2) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#444" strokeWidth={1} />
-      <rect x={toSX(0)} y={toSY(midH) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#444" strokeWidth={1} />
+      {/* Mittelpfetten: nur wenn statisch vorhanden (beide auf gleicher Höhe → ein Band) */}
+      {hasMittel && (
+        <rect x={toSX(0)} y={toSY(midH2) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#444" strokeWidth={1} />
+      )}
 
-      {/* Fußpfetten (2 Stück, Traufseiten) */}
+      {/* Zangen/Kehlbalken: liegen quer, im Längsschnitt als Querschnitte an jedem 2. Gespärre */}
+      {(zange || kehl) && Array.from({ length: Math.floor(bldL / 1.6) + 1 }, (_, i) => {
+        const sx = i * 1.6;
+        if (sx > bldL) return null;
+        return (
+          <rect key={`zg-${i}`} x={toSX(sx) - 3} y={toSY(zangenH) - 8} width={6} height={8}
+                fill="url(#ls-wood)" stroke="#8a5a2b" strokeWidth={1} />
+        );
+      })}
+
+      {/* Fußpfetten / Mauerbank (beidseitig, hintereinander → ein Band) */}
       <rect x={toSX(0)} y={toSY(eavesH) - 8} width={toSX(bldL) - toSX(0)} height={8} fill="url(#ls-wood)" stroke="#555" strokeWidth={1} />
 
       {/* Sparren-Andeutungen (kurze Striche oben) */}
@@ -412,25 +457,35 @@ function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; memb
       {/* Gebäudelänge */}
       <Dim x1={toSX(0)} y1={toSY(-0.5)} x2={toSX(bldL)} y2={toSY(-0.5)} label={fmt(bldL)} />
 
-      {/* Stützenfeldweiten */}
-      {stuetzPositions.slice(0, -1).map((sx, i) => (
-        <Dim
-          key={i}
-          x1={toSX(sx)} y1={toSY(-0.25)}
-          x2={toSX(stuetzPositions[i + 1])} y2={toSY(-0.25)}
-          label={`L${i + 1}=${fmt(stuetzPositions[i + 1] - sx)}`}
-          flip
-        />
-      ))}
+      {/* Stützenfeldweiten (nur wenn es Stützen gibt) */}
+      {stuetzPositions.length > 0 && [0, ...stuetzPositions].map((sx, i, arr) => {
+        const next = arr[i + 1] ?? bldL;
+        return (
+          <Dim
+            key={i}
+            x1={toSX(sx)} y1={toSY(-0.25)}
+            x2={toSX(next)} y2={toSY(-0.25)}
+            label={`L${i + 1}=${fmt(next - sx)}`}
+            flip
+          />
+        );
+      })}
 
       {/* Pfettenhöhen links */}
       <Dim x1={toSX(-1.2)} y1={toSY(0)} x2={toSX(-1.2)} y2={toSY(eavesH)} label={fmt(eavesH)} />
       <Dim x1={toSX(-1.8)} y1={toSY(0)} x2={toSX(-1.8)} y2={toSY(ridgeH)} label={fmt(ridgeH)} />
 
-      {/* Labels */}
-      <text x={toSX(bldL / 2)} y={toSY(ridgeH) - 16} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
-      <text x={toSX(bldL / 2)} y={toSY(midH2) + 20} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfetten</text>
-      <text x={toSX(bldL / 2)} y={toSY(eavesH) + 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Fußpfetten</text>
+      {/* Labels — nur für tatsächlich gezeichnete Bauteile */}
+      {hasFirst && (
+        <text x={toSX(bldL / 2)} y={toSY(ridgeH) - 16} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
+      )}
+      {hasMittel && (
+        <text x={toSX(bldL / 2)} y={toSY(midH2) + 20} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfetten</text>
+      )}
+      {(zange || kehl) && (
+        <text x={toSX(bldL / 4)} y={toSY(zangenH) - 12} fill="#8a5a2b" fontSize={10} fontFamily="sans-serif" textAnchor="middle">{kehl ? 'Kehlbalken' : 'Zangen'}</text>
+      )}
+      <text x={toSX(bldL / 2)} y={toSY(eavesH) + 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Fußpfetten (Mauerbank)</text>
 
       <text x={W / 2} y={18} fill="#333" fontSize={14} fontFamily="sans-serif" fontWeight="bold" textAnchor="middle">Längsschnitt</text>
     </svg>

@@ -16,25 +16,33 @@ import { autoComputeCosts } from './autoCost';
 import { sanitizeRoofForm, sanitizeStructuralSystemType } from './sanitize';
 import { validateLoop } from './validator';
 
-// ── Helper: Wähle ein sinnvolles Tragsystem basierend auf Dachteil-Geometrie ──
+// ── Helper: Tragsystem je Dachteil aus der STATIK ableiten (Sparrenlänge),
+// nicht nur aus der Gebäudebreite — Zimmerer-Praxis: keine Pfetten, wo keine
+// gebraucht werden (günstigste Lösung für den Kunden).
 function defaultStructuralSystemForPart(rp: RoofPart): StructuralSystem {
   const pitch = rp.geometry.pitch;
   const width = rp.geometry.width;
+  const rise = Math.max(0.1, (rp.geometry.ridgeHeight || 0) - (rp.geometry.eavesHeight || 0));
+  const halfW = rp.form === 'pultdach' ? width : width / 2;
+  const slen = Math.sqrt(halfW * halfW + rise * rise);
   let type: StructuralSystemType;
   let reasoning: string;
 
   if (pitch < 5) {
     type = 'sonderfall';
     reasoning = `Flachdach (Neigung ${pitch}°) → Sonderfall`;
-  } else if (width < 6) {
-    type = 'sparrendach';
-    reasoning = `Kleine Spannweite ${width}m → Sparrendach`;
-  } else if (width < 10) {
-    type = 'pfettendach_mittelpfette';
-    reasoning = `Mittlere Spannweite ${width}m → Pfettendach mit Mittelpfette`;
-  } else {
+  } else if (width >= 12) {
     type = 'leimbinder_haupttraeger';
     reasoning = `Große Spannweite ${width}m → Leimbinder`;
+  } else if (slen <= 5.0) {
+    type = 'sparrendach';
+    reasoning = `Sparrenlänge ${slen.toFixed(2)}m ≤ 5m → Sparrendach ohne Pfetten (Mauerbank + Zangen)`;
+  } else if (slen <= 6.5) {
+    type = 'kehlbalkendach';
+    reasoning = `Sparrenlänge ${slen.toFixed(2)}m → Kehlbalkendach (Kehlzangen statt Mittelpfetten)`;
+  } else {
+    type = 'pfettendach_mittelpfette';
+    reasoning = `Sparrenlänge ${slen.toFixed(2)}m > 6,5m → Pfettendach mit Mittelpfette + Zangen`;
   }
 
   return { type, confidence: 0.5, reasoning, alternatives: [], userConfirmed: false };
@@ -130,7 +138,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const sysSanitized = sanitizeStructuralSystemType(project.structuralSystem?.type);
   if (sysSanitized.assumption) structuralSystemAssumptions.push(sysSanitized.assumption);
 
-  const structuralSystemRaw: StructuralSystem = project.structuralSystem
+  let structuralSystemRaw: StructuralSystem = project.structuralSystem
     ? { ...project.structuralSystem, type: sysSanitized.type }
     : {
         type: sysSanitized.type,
@@ -139,6 +147,35 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
         alternatives: [],
         userConfirmed: false,
       };
+
+  // STATIK ENTSCHEIDET DAS TRAGSYSTEM (Zimmerer-Praxis Oststeiermark, günstigste
+  // Lösung für den Kunden): Bei kurzer Sparrenlänge braucht es KEINE Pfetten —
+  //   ≤ 5,0 m Schräglänge  → Sparrendach (nur Mauerbank + Zangen)
+  //   ≤ 6,5 m              → Kehlbalkendach (Kehlzangen statt Mittelpfetten)
+  //   darüber              → Pfettendach mit Mittelpfette (+ Zangen)
+  // Nur wenn der Nutzer das Tragsystem nicht ausdrücklich bestätigt hat.
+  if (!project.structuralSystem?.userConfirmed &&
+      (structuralSystemRaw.type === 'pfettendach' || structuralSystemRaw.type === 'pfettendach_mittelpfette' || structuralSystemRaw.type === 'sparrendach' || structuralSystemRaw.type === 'kehlbalkendach')) {
+    const g0 = derivedGeometry.geometry;
+    // Pultdach: Sparren spannen die VOLLE Breite (nicht die halbe wie beim Satteldach)
+    const hw = roofTypeRaw.form === 'pultdach' ? (g0.width?.value ?? 8) : (g0.width?.value ?? 8) / 2;
+    const rise0 = Math.max(0.1, (g0.ridgeHeight?.value ?? 6) - (g0.eavesHeight?.value ?? 4));
+    const slen = Math.sqrt(hw * hw + rise0 * rise0);
+    const chosen: StructuralSystemType = slen <= 5.0 ? 'sparrendach' : slen <= 6.5 ? 'kehlbalkendach' : 'pfettendach_mittelpfette';
+    if (chosen !== structuralSystemRaw.type) {
+      structuralSystemAssumptions.push({
+        field: 'structuralSystem',
+        value: chosen,
+        reason: `Statischer Tragsystem-Entscheid: Sparrenlänge ${slen.toFixed(2)} m → ${chosen === 'sparrendach' ? 'Sparrendach ohne Pfetten (nur Mauerbank + Zangen) — günstigste Lösung' : chosen === 'kehlbalkendach' ? 'Kehlbalkendach (Kehlzangen statt Mittelpfetten)' : 'Pfettendach mit Mittelpfette + Zangen'}. Vorher: ${structuralSystemRaw.type}.`,
+        source: 'derived',
+      });
+      structuralSystemRaw = {
+        ...structuralSystemRaw,
+        type: chosen,
+        reasoning: `Aus der Statik abgeleitet: Sparrenlänge ${slen.toFixed(2)} m`,
+      };
+    }
+  }
 
   if (!project.structuralSystem) {
     structuralSystemAssumptions.push({
@@ -253,6 +290,51 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const s_k = loadsResult.loadCases
     .filter((lc) => lc.type === 'snow')
     .reduce((sum, lc) => sum + lc.value, 0);
+
+  // ── 4b. VARIANTEN-VERGLEICH: "Viele Wege führen nach Rom — nimm den
+  // günstigsten." Wenn das Tragsystem nicht vom Nutzer bestätigt ist, wird
+  // die statisch sinnvolle Alternative ebenfalls voll durchgerechnet
+  // (Bauteile → Bemessung → Kosten) und die günstigere Variante OHNE rote
+  // Nachweise gewählt. Nur Einzeldach-Fall; Formen ohne Gespärre (Pult/Flach)
+  // haben keine Kehlbalken-Alternative.
+  if (!hasMultiParts && !project.structuralSystem?.userConfirmed &&
+      roofTypeRaw.form !== 'pultdach' && roofTypeRaw.form !== 'flachdach' &&
+      ['sparrendach', 'kehlbalkendach', 'pfettendach', 'pfettendach_mittelpfette'].includes(structuralSystemRaw.type)) {
+    const altType: StructuralSystemType =
+      structuralSystemRaw.type === 'pfettendach_mittelpfette' || structuralSystemRaw.type === 'pfettendach'
+        ? 'kehlbalkendach'
+        : 'pfettendach_mittelpfette';
+    const evaluate = async (sysType: StructuralSystemType) => {
+      const sys: StructuralSystem = { ...structuralSystemRaw, type: sysType };
+      const mem = autoGenerateMembers(derivedGeometry.geometry, roofTypeRaw, sys,
+        { sparrenSpacing, ceilings, planSections, roofOverhang });
+      const calc = await autoCalculateAllMembers(mem.members, { gk: g_k, sk: s_k },
+        derivedGeometry.geometry, sparrenSpacing, sys.supportSpacing ?? 4.0);
+      const cost = await autoComputeCosts(calc.optimizedMembers, derivedGeometry.geometry, {
+        joints: mem.joints, roofForm: roofTypeRaw.form, includeDeckPlanks: true,
+        includeTransport: true, roofOverhang: project.roofOverhang,
+        ...(project.coveringType ? { coveringType: project.coveringType } : {}),
+      });
+      const hasRed = calc.members.some((m) => m.overallStatus === 'red');
+      return { sysType, mem, gross: cost.withLabor?.gross ?? Infinity, hasRed };
+    };
+    const [a, b] = await Promise.all([evaluate(structuralSystemRaw.type), evaluate(altType)]);
+    const candidates = [a, b].filter(v => !v.hasRed);
+    const winner = (candidates.length > 0 ? candidates : [a, b])
+      .reduce((best, v) => (v.gross < best.gross ? v : best));
+    if (winner.sysType !== structuralSystemRaw.type) {
+      structuralSystemRaw = { ...structuralSystemRaw, type: winner.sysType,
+        reasoning: `Varianten-Vergleich: ${winner.sysType} ist günstiger` };
+    }
+    membersResult = winner.mem;
+    const loser = winner === a ? b : a;
+    structuralSystemAssumptions.push({
+      field: 'tragsystem.variantenvergleich',
+      value: winner.sysType,
+      reason: `Beide Varianten voll durchgerechnet: ${a.sysType} ${a.gross === Infinity ? '—' : Math.round(a.gross).toLocaleString('de-AT') + ' €'}${a.hasRed ? ' (Nachweis ROT)' : ''} vs. ${b.sysType} ${b.gross === Infinity ? '—' : Math.round(b.gross).toLocaleString('de-AT') + ' €'}${b.hasRed ? ' (Nachweis ROT)' : ''} → ${winner.sysType} gewählt (günstigste Variante ohne rote Nachweise${loser.hasRed ? '' : `, spart ${Math.round(Math.abs(loser.gross - winner.gross)).toLocaleString('de-AT')} €`}).`,
+      source: 'derived',
+    });
+  }
 
   // ── 5. Berechnung & Optimierung ──────────────────────────────────────────
   const calculationsResult = await autoCalculateAllMembers(
