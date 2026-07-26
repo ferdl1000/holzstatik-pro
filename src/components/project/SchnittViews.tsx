@@ -117,7 +117,7 @@ function BauseitsLegende({ x, y }: { x: number; y: number }) {
 // ════════════════════════════════════════════════════════════════════════════
 // 1) QUERSCHNITT
 // ════════════════════════════════════════════════════════════════════════════
-function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }: { geometry: BuildingGeometry; members: TimberMember[]; coveringName?: string; roofForm?: string; roofOverhang?: number }) {
+export function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }: { geometry: BuildingGeometry; members: TimberMember[]; coveringName?: string; roofForm?: string; roofOverhang?: number }) {
   const W = 800, H = 500;
   const pad = { l: 80, r: 80, t: 60, b: 70 };
 
@@ -426,7 +426,7 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
 // ════════════════════════════════════════════════════════════════════════════
 // 2) LÄNGSSCHNITT
 // ════════════════════════════════════════════════════════════════════════════
-function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; members: TimberMember[] }) {
+export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; members: TimberMember[] }) {
   const W = 800, H = 400;
   const pad = { l: 90, r: 40, t: 50, b: 60 };
 
@@ -600,7 +600,7 @@ function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; memb
 // ════════════════════════════════════════════════════════════════════════════
 // 3) DETAIL TRAUFE
 // ════════════════════════════════════════════════════════════════════════════
-function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingGeometry; members: TimberMember[]; roofOverhang?: number }) {
+export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingGeometry; members: TimberMember[]; roofOverhang?: number }) {
   const W = 600, H = 400;
 
   const pitchDeg = geometry.roofPitch.value;

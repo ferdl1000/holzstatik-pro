@@ -7,6 +7,7 @@ import type { Project, TimberMember } from '@/types/project';
 import { exportToIFC4, exportToIFC2x3 } from './ifc-export';
 import { exportToDXF } from './dxf-export';
 import { exportStatikCSV } from './wallner-mild-export';
+import { exportPlanZeichnungen } from './plan-export';
 
 // ─── Typen ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,14 @@ function buildReadme(project: Project, input: ZipInput): string {
     lines.push('');
   }
 
+  lines.push('zeichnungen/');
+  lines.push('  Querschnitt, Längsschnitt, Traufdetail und je ein Abbundplan pro');
+  lines.push('  Bauteiltyp als SVG — maßstäblich, druckbar, in jedem Browser zu öffnen');
+  lines.push('  und in CAD als Referenz einzulesen.');
+  lines.push('  Bauseitige Teile (Mauerwerk, Mauerkrone, Auflager) sind GRAU dargestellt,');
+  lines.push('  Zimmererholz beige — damit auf der Baustelle klar ist, wer was liefert.');
+  lines.push('');
+
   if (input.pdfBlobs && input.pdfBlobs.length > 0) {
     lines.push(`plaene/ (${input.pdfBlobs.length} Datei(en))`);
     lines.push('  Originale Baupläne und Dokumente aus dem Projekt.');
@@ -101,6 +110,27 @@ function buildReadme(project: Project, input: ZipInput): string {
   lines.push('');
   lines.push('5. CNC-Export (Hundegger):');
   lines.push('   Hundegger Cambium → Datei → Öffnen → machine.btlx');
+  lines.push('');
+  lines.push('════════════════════════════════════════');
+  lines.push('SEMA 14 — SO ÜBERNIMMST DU DAS PROJEKT');
+  lines.push('════════════════════════════════════════');
+  lines.push('');
+  lines.push('SEMA 14 liest IFC2x3 und DXF. IFC4 ist zu neu für diese Version.');
+  lines.push('');
+  lines.push('1. Neues SEMA-Projekt anlegen (Gebäudemaße wie im Bericht).');
+  lines.push('2. Datei -> Import -> IFC -> model_ifc2x3.ifc');
+  lines.push('   Damit kommen Außenwände und Holzbauteile als Volumenkörper herein.');
+  lines.push('3. Datei -> Import -> DXF -> model.dxf als Referenzgeometrie darüberlegen.');
+  lines.push('   Die Layer sind SEMA-konform benannt; Schnittlinien A-A und B-B liegen');
+  lines.push('   auf eigenen Layern und lassen sich getrennt schalten.');
+  lines.push('4. Querschnitte und Positionen aus bestellliste.csv gegenprüfen.');
+  lines.push('5. Abbund direkt aus SEMA fahren oder machine.btlx an die Anlage geben.');
+  lines.push('');
+  lines.push('HINWEIS: Ein vollautomatischer Import in ein FERTIGES SEMA-Projekt ist');
+  lines.push('nicht möglich — SEMA hat kein offenes Projektformat. IFC2x3 + DXF ist der');
+  lines.push('vollständigste Weg, den SEMA 14 anbietet; Bauteillagen und Querschnitte');
+  lines.push('kommen damit übernommen, die SEMA-eigene Bauteillogik wird beim Import neu');
+  lines.push('aufgebaut.');
 
   return lines.join('\n');
 }
@@ -136,6 +166,25 @@ export async function buildProjectZip(input: ZipInput): Promise<Blob> {
   // Vorbemessungs-PDF
   if (input.reportPdf) {
     zip.file('vorbemessung.pdf', input.reportPdf);
+  }
+
+  // Zeichnungen (Schnitte + Abbundpläne) — genau die, die in der App stehen
+  if (project.geometry && members.length > 0) {
+    try {
+      const zeichnungen = exportPlanZeichnungen({
+        geometry: project.geometry,
+        roofForm: project.roofType?.form ?? 'satteldach',
+        members,
+        coveringName: project.coveringType?.type,
+        roofOverhang: project.roofOverhang,
+      });
+      if (zeichnungen.length > 0) {
+        const ordner = zip.folder('zeichnungen');
+        for (const z of zeichnungen) ordner?.file(z.name, z.svg);
+      }
+    } catch {
+      // Zeichnungs-Export ist ein Zusatz — er darf das ZIP nie scheitern lassen.
+    }
   }
 
   // Original-Pläne
