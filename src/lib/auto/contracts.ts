@@ -117,6 +117,9 @@ export interface AutoPipelineResult {
   summary: string;
   /** Aktualisierte Dachteile mit generierten Members (nur wenn multi-part) */
   roofParts?: RoofPart[];
+  /** Gegenprüfung des fertigen Ergebnisses gegen den Einreichplan. Blocker
+   *  bedeuten: Gerechnetes, Gezeichnetes und Plan passen nicht zusammen. */
+  gegenpruefung?: import('./selfCheck').SelbstpruefungErgebnis;
 }
 
 export interface AutoPipelineInput {
@@ -129,4 +132,7 @@ export interface AutoPipelineInput {
   useOptimizer?: boolean;
   /** Optionales Override: Decken-Liste (überschreibt project.ceilings) */
   ceilings?: CeilingArea[];
+  /** Intern: markiert den automatischen zweiten Anlauf nach einer nicht
+   *  bestandenen Gegenprüfung — verhindert eine Endlosschleife. */
+  _zweiterAnlauf?: boolean;
 }

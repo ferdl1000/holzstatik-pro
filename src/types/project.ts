@@ -117,6 +117,14 @@ export interface PersistedAutoRun {
     surcharges: { name: string; percent: number; amount: number }[];
   };
   joints?: { type: string; position: number; notes: string; extraCost: number }[];
+  /** Ergebnis der Gegenprüfung gegen den Einreichplan (siehe lib/auto/selfCheck). */
+  gegenpruefung?: {
+    bestanden: boolean;
+    befunde: {
+      id: string; schwere: 'blocker' | 'warnung'; titel: string;
+      erwartet: string; gefunden: string; bedeutung: string;
+    }[];
+  };
 }
 
 // ===== Documents =====

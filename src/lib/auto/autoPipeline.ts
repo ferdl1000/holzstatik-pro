@@ -16,6 +16,7 @@ import { autoComputeCosts } from './autoCost';
 import { sanitizeRoofForm, sanitizeStructuralSystemType } from './sanitize';
 import { validateLoop } from './validator';
 import { driftShapeFactor } from '@/lib/calc/loads/snow';
+import { pruefeErgebnis, type SelbstpruefungErgebnis } from './selfCheck';
 
 // ── Helper: Tragsystem je Dachteil aus der STATIK ableiten (Sparrenlänge),
 // nicht nur aus der Gebäudebreite — Zimmerer-Praxis: keine Pfetten, wo keine
@@ -518,8 +519,68 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     `max. Ausnutzung η=${maxEta.toFixed(2)}, ` +
     `Bruttosumme ${brutto.toLocaleString('de-AT', { style: 'currency', currency: 'EUR' })}.`;
 
+  // ── 9b. GEGENPRÜFUNG NACH DER FERTIGSTELLUNG ─────────────────────────────
+  // Forderung des Auftraggebers: Das fertige Ergebnis wird nochmal gegen den
+  // Einreichplan gehalten — stimmt es nicht überein, wird es NEU GERECHNET.
+  // Geprüft wird, ob das, was gerechnet wurde, das ist, was gezeichnet wird und
+  // was im Plan steht. Ein Sparren bei 5° biegt sich ganz anders durch als einer
+  // bei 70°; solche Widersprüche dürfen nicht durchrutschen.
+  const planNeigung = ((project as unknown as { _extracted?: { dn_markers?: { value?: number }[] } })
+    ._extracted?.dn_markers ?? [])
+    .map(m => m?.value)
+    .find((v): v is number => typeof v === 'number' && v > 0 && v < 90);
+
+  const gegenpruefung = pruefeErgebnis({
+    geometry: finalGeometry.geometry,
+    roofForm: roofTypeRaw.form,
+    members: membersResult.members,
+    planNeigung,
+    sparrenSpacing,
+    roofOverhang: roofOverhang ?? 0.4,
+  });
+
+  // Nicht bestanden UND heilbar UND noch kein zweiter Anlauf → NEU RECHNEN.
+  if (!gegenpruefung.bestanden && gegenpruefung.reparierteGeometrie && !input._zweiterAnlauf) {
+    const korrigiert = await runAutoPipeline({
+      ...input,
+      _zweiterAnlauf: true,
+      project: {
+        ...project,
+        geometry: gegenpruefung.reparierteGeometrie,
+        // Die reparierte Geometrie ist jetzt die Grundlage — sie darf im
+        // zweiten Lauf nicht wieder von der alten überschrieben werden.
+        roofParts: project.roofParts,
+      },
+    });
+    return {
+      ...korrigiert,
+      allAssumptions: [
+        ...korrigiert.allAssumptions,
+        {
+          field: 'gegenpruefung.neuberechnet',
+          value: gegenpruefung.befunde.filter(b => b.schwere === 'blocker').map(b => b.id).join(', '),
+          reason: `Die Gegenprüfung nach der Fertigstellung hat ${gegenpruefung.befunde.filter(b => b.schwere === 'blocker').length} Widerspruch/Widersprüche zum Plan gefunden: ` +
+            gegenpruefung.befunde.filter(b => b.schwere === 'blocker').map(b => `${b.titel} (erwartet ${b.erwartet}, gefunden ${b.gefunden})`).join('; ') +
+            `. Die Geometrie wurde korrigiert und das gesamte Ergebnis NEU GERECHNET.`,
+          source: 'derived',
+        },
+      ],
+      gegenpruefung: korrigiert.gegenpruefung ?? gegenpruefung,
+    };
+  }
+
+  for (const b of gegenpruefung.befunde) {
+    allAssumptions.push({
+      field: `gegenpruefung.${b.id}`,
+      value: `${b.gefunden} (erwartet: ${b.erwartet})`,
+      reason: `${b.schwere === 'blocker' ? 'WIDERSPRUCH ZUM PLAN' : 'Hinweis'} — ${b.titel}. ${b.bedeutung}`,
+      source: b.schwere === 'blocker' ? 'fallback' : 'derived',
+    });
+  }
+
   // ── 10. Rückgabe ─────────────────────────────────────────────────────────
   return {
+    gegenpruefung,
     geometry: finalGeometry,
     roofType: { roofType: roofTypeRaw, assumptions: structuralSystemAssumptions.filter((a) => a.field === 'roofType') },
     structuralSystem: { structuralSystem: structuralSystemRaw, assumptions: structuralSystemAssumptions.filter((a) => a.field === 'structuralSystem') },

@@ -41,6 +41,15 @@ export function useRecalculateAll(project: Project, onUpdate?: (updates: Partial
         ...(result.joints ? {
           joints: result.joints.map(j => ({ type: j.type, position: j.position, notes: j.notes, extraCost: j.extraCost })),
         } : {}),
+        ...(result.gegenpruefung ? {
+          gegenpruefung: {
+            bestanden: result.gegenpruefung.bestanden,
+            befunde: result.gegenpruefung.befunde.map(b => ({
+              id: b.id, schwere: b.schwere, titel: b.titel,
+              erwartet: b.erwartet, gefunden: b.gefunden, bedeutung: b.bedeutung,
+            })),
+          },
+        } : {}),
       };
       onUpdate({
         geometry: result.geometry.geometry,

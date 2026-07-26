@@ -23,13 +23,25 @@ function pfettendach(supportSpacing?: number): StructuralSystem {
 }
 
 describe('supportSpacing — konfigurierbarer Stützenabstand (autoMembers)', () => {
-  it('ohne expliziten Stützenabstand: nur 1–2 Lastverteilungs-Steher (Pfetten lagern auf Wänden)', () => {
+  it('ohne Beleg im Plan: GAR KEINE Holzsteher (Pfetten lagern auf Wänden, bauseits)', () => {
     const { members: defaultMembers, assumptions } = autoGenerateMembers(geometry, roofType, pfettendach(undefined));
-    const stuetzenDefault = defaultMembers.filter(m => m.type === 'stuetze' && m.name.startsWith('Stützen'));
-    expect(stuetzenDefault[0]?.quantity).toBeLessThanOrEqual(2);
-    expect(assumptions.some(a => a.field === 'stuetze.auflager' && a.reason.includes('tragende'))).toBe(true);
-    // KEINE automatischen Zwischensteher-Reihen mehr
+    // Regel des Auftraggebers: wo im Plan kein Steher eingezeichnet ist, wird
+    // auch keiner erzeugt, bemessen, eingepreist oder gezeichnet.
+    expect(defaultMembers.some(m => m.type === 'stuetze')).toBe(false);
+    expect(assumptions.some(a => a.field === 'stuetze.auflager' && /kein Holzsteher eingezeichnet/.test(a.reason))).toBe(true);
     expect(defaultMembers.some(m => m.name.includes('Zwischensteher'))).toBe(false);
+  });
+
+  it('beschrifteter Stützenquerschnitt im Plan gilt als Beleg → Steher werden erzeugt', () => {
+    const { members } = autoGenerateMembers(geometry, roofType, pfettendach(undefined), {
+      planSections: [{ member: 'stuetze', b: 120, h: 120, raw: 'Stütze 12/12' }],
+    });
+    const st = members.find(m => m.type === 'stuetze');
+    expect(st).toBeDefined();
+    expect(st!.quantity).toBeGreaterThan(0);
+    // Querschnitt kommt aus der Planbeschriftung, nicht aus dem Default 10/10
+    expect(st!.width).toBe(120);
+    expect(st!.height).toBe(120);
   });
 
   it('explizit gesetzter Stützenabstand (Holzriegel/Halle) erzeugt volle Steher-Reihen', () => {

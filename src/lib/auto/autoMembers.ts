@@ -555,19 +555,37 @@ export function autoGenerateMembers(
     // stehen (Zimmerer-Praxis; Hinweis vom Nutzer). Volle Steher-Reihen nur,
     // wenn der Nutzer den Stützenabstand im Tragwerk-Tab EXPLIZIT setzt
     // (z.B. Holzriegelbau/offene Halle).
+    // REGEL DES AUFTRAGGEBERS: Wo im Plan KEIN Holzsteher eingezeichnet ist,
+    // wird auch keiner erzeugt und keiner gezeichnet. Ein Steher entsteht nur
+    // aus einem Beleg:
+    //   (a) der Nutzer setzt den Stützenabstand im Tragwerk-Tab (Holzriegelbau,
+    //       offene Halle) → volle Steherreihen, oder
+    //   (b) der Plan beschriftet einen Stützenquerschnitt (z.B. "Stütze 12/12")
+    //       → es gibt Steher, Anzahl aus dem Stützenabstand.
+    // Sonst: KEINE Steher. Die Pfetten liegen dann auf Giebel- und tragenden
+    // Innenwänden — das ist Mauerwerk und damit bauseits, kein Zimmererholz.
     const stuetzenAbstand = structuralSystem.supportSpacing ?? 4.0;
     const explicitSpacing = structuralSystem.supportSpacing != null;
-    const stuetzenAnzahlFirst = explicitSpacing
+    const stuetzeImPlan = !!opts?.planSections?.some(s => s.member === 'stuetze');
+    const stuetzenBelegt = explicitSpacing || stuetzeImPlan;
+    const stuetzenAnzahlFirst = stuetzenBelegt
       ? Math.max(1, Math.ceil(buildingLength / stuetzenAbstand) - 1)
-      : Math.min(2, Math.max(1, Math.round(buildingLength / 10)));
-    if (!explicitSpacing) {
+      : 0;
+    if (!stuetzenBelegt) {
       assumptions.push({
         field: 'stuetze.auflager',
-        value: `${stuetzenAnzahlFirst} Lastverteilungs-Steher`,
-        reason: `Pfetten lagern auf Giebel-/tragenden Innenwänden (statische Stützweite ${stuetzenAbstand} m angenommen). ` +
-          `Nur ${stuetzenAnzahlFirst} Holzsteher zur Lastverteilung angesetzt — bitte gegen Plan prüfen: ` +
-          `Steher nur dort, wo tragende Wände/Unterzüge darunter stehen. Bei Holzriegelbau/offener Halle Stützenabstand im Tragwerk-Tab setzen.`,
+        value: 'keine Holzsteher',
+        reason: `Im Plan ist kein Holzsteher eingezeichnet oder beschriftet — es werden deshalb KEINE angesetzt und keine gezeichnet. ` +
+          `Die Pfetten liegen auf den Giebelwänden und auf tragenden Innenwänden (bauseits, Mauerwerk); die statische Stützweite ist mit ${stuetzenAbstand} m angenommen. ` +
+          `Falls die Innenwände fehlen oder doch Steher gewünscht sind: im Tragwerk-Tab den Stützenabstand setzen, dann werden Steher erzeugt, bemessen und eingepreist.`,
         source: 'standard',
+      });
+    } else if (stuetzeImPlan && !explicitSpacing) {
+      assumptions.push({
+        field: 'stuetze.auflager',
+        value: `${stuetzenAnzahlFirst} Steher je Pfettenreihe`,
+        reason: `Der Plan beschriftet einen Stützenquerschnitt — es gibt also Holzsteher. Anzahl aus dem angenommenen Stützenabstand ${stuetzenAbstand} m abgeleitet. Positionen am Plan prüfen.`,
+        source: 'derived',
       });
     }
     const stuetzenHoehe = +(ridgeH / 2 - 2.5).toFixed(2); // vereinfacht: halbe Gebäudehöhe - Deckenebene
@@ -585,30 +603,37 @@ export function autoGenerateMembers(
     const pfettenCount = sysType === 'pfettendach_mittelpfette' ? 3 : 1; // First + 2 × Mitte
     const totalStuetzen = stuetzenAnzahlFirst * pfettenCount;
 
-    members.push(makeMember({
-      idPrefix: 'ST',
-      name: `Stützen ST1-ST${totalStuetzen}`,
-      type: 'stuetze',
-      material: 'C24',
-      width: 100,
-      height: 100,
-      length: stuetzenHoeheKorrekt,
-      quantity: totalStuetzen,
-      crossSection: '10/10',
-    }));
+    // Ohne Beleg im Plan entsteht KEIN Steher-Bauteil — dann steht auch nichts
+    // in der Stückliste, im Angebot und in keiner Zeichnung.
+    if (totalStuetzen > 0) {
+      const stSec = planSec('stuetze', 100, 100);
+      members.push(makeMember({
+        idPrefix: 'ST',
+        name: `Stützen ST1-ST${totalStuetzen}`,
+        type: 'stuetze',
+        material: 'C24',
+        width: stSec.b,
+        height: stSec.h,
+        length: stuetzenHoeheKorrekt,
+        quantity: totalStuetzen,
+        crossSection: `${stSec.b / 10}/${stSec.h / 10}`,
+      }));
 
-    assumptions.push({
-      field: 'stuetze.spacing',
-      value: stuetzenAbstand,
-      reason: `Stützenabstand ${stuetzenAbstand} m angenommen (übliche Feldlänge für KVH-Pfetten).`,
-      source: 'standard',
-    });
-    assumptions.push({
-      field: 'stuetze.crossSection',
-      value: '10/10',
-      reason: 'Standard-Querschnitt 10/10 cm C24 für Pfettenstützen angenommen.',
-      source: 'standard',
-    });
+      assumptions.push({
+        field: 'stuetze.spacing',
+        value: stuetzenAbstand,
+        reason: `Stützenabstand ${stuetzenAbstand} m angenommen (übliche Feldlänge für KVH-Pfetten).`,
+        source: 'standard',
+      });
+      if (!stSec.fromPlan) {
+        assumptions.push({
+          field: 'stuetze.crossSection',
+          value: '10/10',
+          reason: 'Standard-Querschnitt 10/10 cm C24 für Pfettenstützen angenommen.',
+          source: 'standard',
+        });
+      }
+    }
 
     // KEINE automatischen Zwischensteher-Reihen: große Sparrenstützweiten werden
     // über die Mittelpfette abgetragen (die auf tragenden Wänden lagert), nicht

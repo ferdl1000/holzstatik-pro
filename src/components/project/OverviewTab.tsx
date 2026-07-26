@@ -92,8 +92,47 @@ export function OverviewTab({ project, onUpdate, onNavigate }: OverviewTabProps)
     );
   }
 
+  const pruefung = project.autoRun?.gegenpruefung;
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
+      {/* Gegenprüfung gegen den Einreichplan — steht GANZ OBEN, weil ein
+          Widerspruch zwischen Plan, Berechnung und Zeichnung das ganze
+          Ergebnis unbrauchbar macht. */}
+      {pruefung && (
+        <div className={`rounded-lg border-2 p-4 ${
+          pruefung.bestanden
+            ? 'border-[hsl(var(--status-green)/0.5)] bg-[hsl(var(--status-green-bg))]'
+            : 'border-[hsl(var(--status-red)/0.6)] bg-[hsl(var(--status-red-bg))]'}`}>
+          <div className="flex items-start gap-3">
+            {pruefung.bestanden
+              ? <CheckCircle className="h-5 w-5 mt-0.5 text-[hsl(var(--status-green))] shrink-0" />
+              : <XCircle className="h-5 w-5 mt-0.5 text-[hsl(var(--status-red))] shrink-0" />}
+            <div className="space-y-1.5 min-w-0">
+              <p className="font-semibold text-sm">
+                {pruefung.bestanden
+                  ? 'Gegenprüfung bestanden — Plan, Berechnung und Zeichnung stimmen überein'
+                  : 'Gegenprüfung NICHT bestanden — Plan, Berechnung und Zeichnung widersprechen sich'}
+              </p>
+              {pruefung.befunde.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Dachneigung, First- und Traufhöhe, Sparrenlänge und Sparrenanzahl passen zusammen.
+                  Was gerechnet wurde, ist auch das, was gezeichnet ist.
+                </p>
+              )}
+              {pruefung.befunde.map(b => (
+                <div key={b.id} className="text-xs">
+                  <span className={`font-medium ${b.schwere === 'blocker' ? 'text-[hsl(var(--status-red))]' : 'text-[hsl(var(--status-yellow))]'}`}>
+                    {b.schwere === 'blocker' ? 'Widerspruch' : 'Hinweis'}: {b.titel}
+                  </span>
+                  <span className="text-muted-foreground"> — erwartet {b.erwartet}, gefunden {b.gefunden}. {b.bedeutung}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Kopfzeile: Summe + Ampel + Aktion */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="rounded-lg border-2 border-primary/40 bg-primary/5 p-5 md:col-span-2">

@@ -78,7 +78,13 @@ function Dim({
   );
 }
 
-// ── Holzschraffur-Pattern ───────────────────────────────────────────────────
+// ── Schraffuren ─────────────────────────────────────────────────────────────
+// Holz = warm/beige, BAUSEITS (Mauerwerk, Beton, Auflager, Innenwände) = GRAU.
+// Der Zimmermeister muss auf einen Blick sehen, was er liefert und was der
+// Baumeister vorher fertig haben muss.
+export const BAUSEITS_FILL = '#d4d4d8';
+export const BAUSEITS_STROKE = '#71717a';
+
 function WoodPattern({ id }: { id: string }) {
   return (
     <defs>
@@ -86,7 +92,25 @@ function WoodPattern({ id }: { id: string }) {
         <rect width="6" height="6" fill="#f5e9d5" />
         <line x1="0" y1="6" x2="6" y2="0" stroke="#c9b48a" strokeWidth={0.6} />
       </pattern>
+      {/* Mauerwerk/bauseits: neutrale graue Kreuzschraffur, klar vom Holz unterscheidbar */}
+      <pattern id={`${id}-bauseits`} patternUnits="userSpaceOnUse" width="7" height="7">
+        <rect width="7" height="7" fill={BAUSEITS_FILL} />
+        <line x1="0" y1="7" x2="7" y2="0" stroke={BAUSEITS_STROKE} strokeWidth={0.5} />
+        <line x1="0" y1="0" x2="7" y2="7" stroke={BAUSEITS_STROKE} strokeWidth={0.5} />
+      </pattern>
     </defs>
+  );
+}
+
+/** Kleine Legende, die Holz und bauseitige Leistung auseinanderhält. */
+function BauseitsLegende({ x, y }: { x: number; y: number }) {
+  return (
+    <g>
+      <rect x={x} y={y} width={12} height={9} fill="#f5e9d5" stroke="#c9b48a" strokeWidth={0.8} />
+      <text x={x + 16} y={y + 8} fontSize={8} fill="#475569">Holz (Zimmerei)</text>
+      <rect x={x + 100} y={y} width={12} height={9} fill={BAUSEITS_FILL} stroke={BAUSEITS_STROKE} strokeWidth={0.8} />
+      <text x={x + 116} y={y + 8} fontSize={8} fill="#475569">bauseits (Mauerwerk/Beton)</text>
+    </g>
   );
 }
 
@@ -164,20 +188,23 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
       <WoodPattern id="qs-wood" />
+      <BauseitsLegende x={pad.l} y={H - 16} />
 
       {/* Boden */}
       <line x1={pad.l - 20} y1={toSY(yGround)} x2={W - pad.r + 20} y2={toSY(yGround)} stroke="#aaa" strokeWidth={1} strokeDasharray="4,3" />
 
-      {/* Aussenwände (maßstäblich, Außenkante = Gebäudemaß) */}
-      <rect x={toSX(xL) - px(wandDicke * 1000)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
-      <rect x={toSX(xR)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
+      {/* Aussenwände — BAUSEITS (Mauerwerk), deshalb grau und nicht wie Holz.
+          Die Mauerkrone inkl. Auflager für die Mauerbank muss der Baumeister
+          fertig herstellen, bevor die Zimmerei kommt. */}
+      <rect x={toSX(xL) - px(wandDicke * 1000)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect x={toSX(xR)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
 
       {/* Tragende Innenwände/Auflager unter den Mittelpfetten — NUR wenn die
           Statik Mittelpfetten vorsieht (beim Sparren-/Kehlbalkendach entfällt beides) */}
       {!isPult && !isFlach && mittelPf && (
         <>
-          <rect x={toSX(xMidL) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-          <rect x={toSX(xMidR) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+          <rect x={toSX(xMidL) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
+          <rect x={toSX(xMidR) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
         </>
       )}
 
@@ -450,13 +477,14 @@ function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; memb
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
       <WoodPattern id="ls-wood" />
+      <BauseitsLegende x={pad.l} y={H - 16} />
 
       {/* Boden */}
       <line x1={pad.l - 20} y1={toSY(0)} x2={W - pad.r + 10} y2={toSY(0)} stroke="#aaa" strokeWidth={1} strokeDasharray="4,3" />
 
-      {/* Giebelwände links + rechts */}
-      <rect x={toSX(0) - 14} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
-      <rect x={toSX(bldL)} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
+      {/* Giebelwände links + rechts — BAUSEITS (Mauerwerk), grau */}
+      <rect x={toSX(0) - 14} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect x={toSX(bldL)} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
 
       {/* Steher unter der FIRSTPFETTE — Kopf an der Pfetten-Unterkante,
           Länge = member.length (die gerechnete Knicklänge), Fuß auf Deckenebene */}
@@ -675,14 +703,18 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
       <WoodPattern id="dt-wood" />
+      <BauseitsLegende x={16} y={H - 16} />
 
-      {/* Mauerkrone — Außenkante = mxOuter */}
+      {/* Mauerkrone — BAUSEITS. Grau, nicht wie Holz: das Auflager für die
+          Mauerbank muss der Baumeister waagrecht und höhengerecht herstellen,
+          bevor die Zimmerei aufschlägt. */}
       <rect
         x={mxOuter} y={yMauerOK}
         width={mauerB * sc} height={mauerH * sc}
-        fill="url(#dt-wood)" stroke="#333" strokeWidth={1.5}
+        fill="url(#dt-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.5}
       />
-      <text x={mxOuter + 4} y={yMauerOK + mauerH * sc * 0.72} fill="#555" fontSize={10} fontFamily="sans-serif">Mauerkrone</text>
+      <text x={mxOuter + 4} y={yMauerOK + mauerH * sc * 0.72} fill="#52525b" fontSize={10} fontFamily="sans-serif">Mauerkrone (bauseits)</text>
+      <text x={mxOuter + 4} y={yMauerOK + mauerH * sc * 0.72 + 12} fill="#71717a" fontSize={8} fontFamily="sans-serif">Auflager waagrecht + höhengerecht</text>
 
       {/* Mauerbank (Fußpfette) — liegt AUF der Mauerkrone */}
       <rect
