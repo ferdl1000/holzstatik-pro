@@ -73,6 +73,44 @@ export function shapeFactor(roofPitch: number, form: SnowLoadInput['roofForm']):
   return 0; // > 60° → kein Schnee dauerhaft
 }
 
+/**
+ * Formbeiwert μ₂ für SCHNEEANHÄUFUNG an einem höheren Bauteil
+ * (EC1-1-3 / ÖNORM B 1991-1-3 Abschn. 5.3.6).
+ *
+ * Das ist der klassische Einsturzfall bei Vordächern, Carports und Anbauten:
+ * vom höheren Hauptdach rutscht Schnee ab und der Wind weht zusätzlich
+ * Schnee in die Ecke. Auf dem niedrigeren Dach liegt dort ein Vielfaches
+ * der normalen Schneelast.
+ *
+ *   μ_s = Abrutschanteil vom Oberdach (nur bei Neigung > 15°)
+ *   μ_w = (b₁ + b₂) / (2·h),  begrenzt auf γ·h / s_k   (γ = 2 kN/m³)
+ *   μ₂  = μ_s + μ_w,  geklemmt auf 0,8 … 4,0
+ *   l_s = 2·h,  geklemmt auf 5 … 15 m  (Länge des Anhäufungsbereichs)
+ *
+ * @param sk        charakteristische Schneelast am Boden [kN/m²]
+ * @param h         Höhenversprung Oberdach ↔ Unterdach [m]
+ * @param b1        Breite des niedrigeren Daches [m]
+ * @param b2        Breite des höheren Daches [m]
+ * @param pitchOben Neigung des höheren Daches [°]
+ */
+export function driftShapeFactor(
+  sk: number, h: number, b1: number, b2: number, pitchOben: number,
+): { mu2: number; ls: number; explanation: string } {
+  const hh = Math.max(0.1, h);
+  const gamma = 2.0; // kN/m³ Wichte des abgelagerten Schnees
+  // Abrutschanteil: nur wenn das obere Dach steil genug ist
+  const mu_s = pitchOben > 15 ? 0.5 * Math.min(1, (pitchOben - 15) / 15) : 0;
+  const mu_w_roh = (b1 + b2) / (2 * hh);
+  const mu_w = Math.min(mu_w_roh, (gamma * hh) / Math.max(0.1, sk));
+  const mu2 = Math.min(4.0, Math.max(0.8, mu_s + mu_w));
+  const ls = Math.min(15, Math.max(5, 2 * hh));
+  return {
+    mu2: +mu2.toFixed(2),
+    ls: +ls.toFixed(1),
+    explanation: `Schneeanhäufung am ${hh.toFixed(2)} m höheren Bauteil: μ_s = ${mu_s.toFixed(2)} (Abrutschen vom ${pitchOben}°-Dach) + μ_w = ${mu_w.toFixed(2)} (Verwehung) → μ₂ = ${mu2.toFixed(2)} über ${ls.toFixed(1)} m Anhäufungslänge.`,
+  };
+}
+
 /** Schneelast für Sattel-/Pultdach: symmetrisch + einseitig (windverwehter Schnee) */
 export function calculateSnowLoad(input: SnowLoadInput): SnowLoadResult {
   const sk = characteristicGroundSnow(input.zone, input.altitude);

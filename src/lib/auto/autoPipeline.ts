@@ -15,6 +15,7 @@ import { autoCalculateAllMembers } from './autoCalculate';
 import { autoComputeCosts } from './autoCost';
 import { sanitizeRoofForm, sanitizeStructuralSystemType } from './sanitize';
 import { validateLoop } from './validator';
+import { driftShapeFactor } from '@/lib/calc/loads/snow';
 
 // ── Helper: Tragsystem je Dachteil aus der STATIK ableiten (Sparrenlänge),
 // nicht nur aus der Gebäudebreite — Zimmerer-Praxis: keine Pfetten, wo keine
@@ -370,6 +371,62 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     sparrenSpacing,
     structuralSystemRaw.supportSpacing ?? 4.0,
   );
+
+  // ── 5a. Schneeanhäufung an tiefer liegenden Dachteilen ───────────────────
+  // Vordächer, Carports und Anbauten, die an ein höheres Dach anschließen,
+  // bekommen dort einen Schneesack: abrutschender Schnee vom Oberdach plus
+  // Verwehung. Bisher wurden sie mit derselben Schneelast wie das Hauptdach
+  // gerechnet — genau der Fall, in dem Vordächer im Winter einbrechen.
+  if (hasMultiParts && updatedRoofParts && updatedRoofParts.length > 1) {
+    const hauptdach = updatedRoofParts.find(rp => rp.kind === 'main') ?? updatedRoofParts[0];
+    const oberkante = hauptdach.geometry.ridgeHeight;
+
+    for (const rp of updatedRoofParts) {
+      if (rp.id === hauptdach.id) continue;
+      const versprung = oberkante - rp.geometry.ridgeHeight;
+      if (versprung < 0.5) continue;   // kein nennenswerter Höhenunterschied
+
+      const drift = driftShapeFactor(
+        s_k_schnee / 0.8,   // Rückrechnung auf die Bodenschneelast (μ₁ = 0,8)
+        versprung,
+        rp.geometry.width,
+        hauptdach.geometry.width,
+        hauptdach.geometry.pitch,
+      );
+      // μ₁ des Normalfalls ist 0,8 — der Anhäufungsfall wird ins Verhältnis gesetzt
+      const s_k_drift = +(s_k_schnee * (drift.mu2 / 0.8)).toFixed(2);
+      if (s_k_drift <= s_k_schnee) continue;
+
+      const partMembers = membersResult.members.filter(m => m.id.startsWith(`${rp.id}_`));
+      if (partMembers.length === 0) continue;
+
+      const partGeomForCalc = roofPartToGeometry(rp);
+      const driftCalc = await autoCalculateAllMembers(
+        partMembers,
+        { ...bemessungsLasten, sk: s_k_drift },
+        partGeomForCalc,
+        sparrenSpacing,
+        4.0,
+      );
+
+      // Ergebnisse dieses Dachteils durch die Schneesack-Bemessung ersetzen
+      for (const neu of driftCalc.members) {
+        const idx = calculationsResult.members.findIndex(m => m.member.id === neu.member.id);
+        if (idx >= 0) calculationsResult.members[idx] = neu;
+      }
+      for (const neu of driftCalc.optimizedMembers) {
+        const idx = calculationsResult.optimizedMembers.findIndex(m => m.id === neu.id);
+        if (idx >= 0) calculationsResult.optimizedMembers[idx] = neu;
+      }
+
+      calculationsResult.assumptions.push({
+        field: `${rp.id}.schneeanhaeufung`,
+        value: `s_k = ${s_k_drift} kN/m² statt ${s_k_schnee.toFixed(2)} kN/m²`,
+        reason: `[${rp.label}] ${drift.explanation} Dieser Dachteil liegt ${versprung.toFixed(2)} m unter dem Hauptdach und wurde deshalb mit der erhöhten Schneelast bemessen (EC1-1-3 Abschn. 5.3.6). Genau hier brechen Vordächer im Winter ein.`,
+        source: 'derived',
+      });
+    }
+  }
 
   // ── 5b. Modus-abhängige optimizedMembers ─────────────────────────────────
   // Wenn dimensioningMode === 'sicher': optimizedMembers mit sicherer Variante
