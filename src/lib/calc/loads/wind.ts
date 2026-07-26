@@ -53,19 +53,25 @@ export const VB_BY_ZONE: Record<WindZone, number> = {
  * Hier in tabellarischer Vereinfachung:
  */
 export function exposureCoefficient(terrain: TerrainCategory, z: number): number {
-  // Werte interpoliert aus EC1-1-4 Bild 4.2, vereinfacht
-  const params: Record<TerrainCategory, { z0: number; min: number; max: number }> = {
-    '0':  { z0: 0.003, min: 2.5, max: 4.0 },   // Meer, Seen
-    'I':  { z0: 0.01,  min: 2.2, max: 3.6 },   // freies Feld
-    'II': { z0: 0.05,  min: 1.8, max: 3.0 },   // niedrige Vegetation, vereinzelt Hindernisse
-    'III':{ z0: 0.3,   min: 1.3, max: 2.3 },   // Vororte, Wälder
-    'IV': { z0: 1.0,   min: 1.0, max: 1.8 },   // Großstadt
+  // EC1-1-4 Abschn. 4.3 — echte Formel statt Interpolationstabelle:
+  //   k_r   = 0,19 · (z_0 / z_0,II)^0,07        Geländefaktor
+  //   c_r   = k_r · ln(z / z_0)                  Rauigkeitsbeiwert
+  //   I_v   = k_l / (c_o · ln(z / z_0))          Turbulenzintensität (k_l = 1, c_o = 1)
+  //   c_e   = c_r² · c_o² · (1 + 7 · I_v)
+  const params: Record<TerrainCategory, { z0: number; zmin: number }> = {
+    '0':  { z0: 0.003, zmin: 1 },    // Meer, Seen
+    'I':  { z0: 0.01,  zmin: 1 },    // freies Feld
+    'II': { z0: 0.05,  zmin: 2 },    // niedrige Vegetation, vereinzelte Hindernisse
+    'III':{ z0: 0.3,   zmin: 5 },    // Vororte, Wälder
+    'IV': { z0: 1.0,   zmin: 10 },   // Großstadt
   };
   const p = params[terrain];
-  const z_eff = Math.max(z, 5);
-  // c_e wächst grob log-linear mit z, sättigt bei 200 m
-  const f = Math.min(1, Math.log(z_eff / p.z0) / Math.log(200 / p.z0));
-  return p.min + (p.max - p.min) * f;
+  const z_eff = Math.max(z, p.zmin);
+  const kr = 0.19 * Math.pow(p.z0 / 0.05, 0.07);
+  const lnz = Math.log(z_eff / p.z0);
+  const cr = kr * lnz;
+  const Iv = 1 / lnz;
+  return cr * cr * (1 + 7 * Iv);
 }
 
 /**
@@ -73,14 +79,95 @@ export function exposureCoefficient(terrain: TerrainCategory, z: number): number
  * α = Dachneigung. Druck positiv, Sog negativ.
  */
 export function cpeSaddleRoof(alpha: number): { pressure: number; suction: number; areaF: number; areaG: number; areaH: number; areaI: number; areaJ: number } {
-  // Vereinfachte Tabellenwerte (Wind senkrecht zum First)
-  // Bereiche F/G/H = Luvseite, I/J = Leeseite
-  if (alpha <= 5)   return { pressure: 0.0,  suction: -1.8, areaF: -1.8, areaG: -1.2, areaH: -0.7, areaI: -0.6, areaJ: 0.2 };
-  if (alpha <= 15)  return { pressure: 0.2,  suction: -1.7, areaF: -0.9, areaG: -0.8, areaH: -0.3, areaI: -0.4, areaJ: -1.0 };
-  if (alpha <= 30)  return { pressure: 0.7,  suction: -0.5, areaF: -0.5, areaG: -0.5, areaH: -0.2, areaI: -0.4, areaJ: -0.5 };
-  if (alpha <= 45)  return { pressure: 0.7,  suction: -0.0, areaF: 0.0,  areaG: 0.0,  areaH: 0.0,  areaI: -0.2, areaJ: -0.3 };
-  if (alpha <= 60)  return { pressure: 0.7,  suction: 0.0,  areaF: 0.7,  areaG: 0.7,  areaH: 0.7,  areaI: -0.2, areaJ: -0.3 };
-  return            { pressure: 0.8,  suction: 0.0,  areaF: 0.8,  areaG: 0.8,  areaH: 0.8,  areaI: -0.2, areaJ: -0.3 };
+  // Tab. 7.4a — Wind SENKRECHT zum First (θ = 0°). Luv F/G/H, Lee I/J.
+  const t0 =
+    alpha <= 5  ? { F: -1.7, G: -1.2, H: -0.6, I: -0.6, J: -0.6, p: 0.0 } :
+    alpha <= 15 ? { F: -0.9, G: -0.8, H: -0.3, I: -0.4, J: -1.0, p: 0.2 } :
+    alpha <= 30 ? { F: -0.5, G: -0.5, H: -0.2, I: -0.4, J: -0.5, p: 0.7 } :
+    alpha <= 45 ? { F:  0.0, G:  0.0, H:  0.0, I: -0.2, J: -0.3, p: 0.7 } :
+    alpha <= 60 ? { F:  0.7, G:  0.7, H:  0.7, I: -0.2, J: -0.3, p: 0.7 } :
+                  { F:  0.8, G:  0.8, H:  0.8, I: -0.2, J: -0.3, p: 0.8 };
+
+  // Tab. 7.4b — Wind PARALLEL zum First (θ = 90°). Hier entsteht auch bei
+  // steilen Dächern erheblicher Sog über die GESAMTE Dachfläche. Dieser Fall
+  // wurde bisher komplett ignoriert, wodurch der Sog bei 30°–60° zu exakt
+  // 0,00 kN/m² wurde — bei keinem Steildach ein realistischer Wert.
+  const t90 =
+    alpha <= 5  ? { F: -1.6, G: -1.8, H: -0.6, I: -0.5 } :
+    alpha <= 15 ? { F: -1.3, G: -2.0, H: -0.6, I: -0.5 } :
+    alpha <= 30 ? { F: -1.1, G: -1.5, H: -0.8, I: -0.5 } :
+    alpha <= 45 ? { F: -1.1, G: -1.4, H: -0.9, I: -0.5 } :
+                  { F: -1.1, G: -1.2, H: -0.8, I: -0.5 };
+
+  const suction = Math.min(t0.F, t0.G, t0.H, t0.I, t0.J, t90.F, t90.G, t90.H, t90.I);
+  return {
+    pressure: t0.p,
+    suction,
+    areaF: Math.min(t0.F, t90.F),
+    areaG: Math.min(t0.G, t90.G),
+    areaH: Math.min(t0.H, t90.H),
+    areaI: Math.min(t0.I, t90.I),
+    areaJ: t0.J,
+  };
+}
+
+/** Pultdach — EC1-1-4 Tab. 7.3a/b (θ = 0°, 180°, 90°). */
+export function cpeMonopitchRoof(alpha: number) {
+  const luv =
+    alpha <= 5  ? { F: -1.7, G: -1.2, H: -0.6, p: 0.0 } :
+    alpha <= 15 ? { F: -0.9, G: -0.8, H: -0.3, p: 0.2 } :
+    alpha <= 30 ? { F: -0.5, G: -0.5, H: -0.2, p: 0.7 } :
+    alpha <= 45 ? { F:  0.0, G:  0.0, H:  0.0, p: 0.7 } :
+                  { F:  0.7, G:  0.7, H:  0.7, p: 0.8 };
+  // θ = 180° (Wind auf die hohe Traufkante) und θ = 90° liefern den Sog
+  const lee =
+    alpha <= 5  ? { F: -2.3, G: -1.3, H: -0.8 } :
+    alpha <= 15 ? { F: -2.5, G: -1.3, H: -0.9 } :
+    alpha <= 30 ? { F: -1.1, G: -0.8, H: -0.8 } :
+    alpha <= 45 ? { F: -0.6, G: -0.5, H: -0.5 } :
+                  { F: -0.5, G: -0.5, H: -0.5 };
+  const quer = alpha <= 15 ? -2.1 : alpha <= 30 ? -1.8 : -1.5;
+  const suction = Math.min(luv.F, luv.G, luv.H, lee.F, lee.G, lee.H, quer);
+  return { pressure: luv.p, suction, areaF: Math.min(luv.F, lee.F), areaG: Math.min(luv.G, lee.G), areaH: Math.min(luv.H, lee.H), areaI: quer, areaJ: quer };
+}
+
+/** Walmdach / Krüppelwalmdach — EC1-1-4 Tab. 7.5. */
+export function cpeHippedRoof(alpha: number) {
+  const t =
+    alpha <= 5  ? { F: -1.7, G: -1.2, H: -0.6, I: -0.3, J: -0.6, p: 0.0 } :
+    alpha <= 15 ? { F: -1.3, G: -1.3, H: -0.6, I: -0.5, J: -0.7, p: 0.2 } :
+    alpha <= 30 ? { F: -1.2, G: -1.4, H: -0.8, I: -0.5, J: -0.7, p: 0.5 } :
+    alpha <= 45 ? { F: -1.2, G: -1.4, H: -0.8, I: -0.5, J: -0.7, p: 0.7 } :
+                  { F: -1.2, G: -1.2, H: -0.8, I: -0.5, J: -0.7, p: 0.8 };
+  return { pressure: t.p, suction: Math.min(t.F, t.G, t.H, t.I, t.J), areaF: t.F, areaG: t.G, areaH: t.H, areaI: t.I, areaJ: t.J };
+}
+
+/** Flachdach — EC1-1-4 Tab. 7.2 (scharfkantige Attika). */
+export function cpeFlatRoof() {
+  return { pressure: 0.2, suction: -1.8, areaF: -1.8, areaG: -1.2, areaH: -0.7, areaI: -0.2, areaJ: 0.2 };
+}
+
+/** Wählt die zur Dachform passende cpe-Tabelle. */
+export function cpeForRoof(form: WindLoadInput['roofForm'], alpha: number) {
+  switch (form) {
+    case 'flachdach':        return cpeFlatRoof();
+    case 'pultdach':         return cpeMonopitchRoof(alpha);
+    case 'walmdach':
+    case 'krueppelwalmdach': return cpeHippedRoof(alpha);
+    case 'satteldach':       return cpeSaddleRoof(alpha);
+    default: {
+      // Mischform: konservativ der ungünstigste Wert aus Sattel- und Walmdach
+      const s = cpeSaddleRoof(alpha);
+      const w = cpeHippedRoof(alpha);
+      return {
+        pressure: Math.max(s.pressure, w.pressure),
+        suction: Math.min(s.suction, w.suction),
+        areaF: Math.min(s.areaF, w.areaF), areaG: Math.min(s.areaG, w.areaG),
+        areaH: Math.min(s.areaH, w.areaH), areaI: Math.min(s.areaI, w.areaI),
+        areaJ: Math.min(s.areaJ, w.areaJ),
+      };
+    }
+  }
 }
 
 export function calculateWindLoad(input: WindLoadInput): WindLoadResult {
@@ -90,11 +177,14 @@ export function calculateWindLoad(input: WindLoadInput): WindLoadResult {
   const ce = exposureCoefficient(input.terrain, input.buildingHeight);
   const qp = ce * qb;
 
-  const cpe = cpeSaddleRoof(input.roofPitch);
+  // Dachform bestimmt die cpe-Tabelle (vorher wurde für JEDE Form die
+  // Satteldach-Tabelle verwendet).
+  const cpe = cpeForRoof(input.roofForm, input.roofPitch);
 
   const we = {
     pressure: cpe.pressure * qp,
-    suction: cpe.suction * qp,
+    // Sicherung: Sog ist bei keinem Dach exakt null.
+    suction: Math.min(cpe.suction, -0.3) * qp,
   };
 
   const explanation = `Windzone ${input.zone}: Basis-Windgeschwindigkeit v_b = ${vb} m/s (≈ ${(vb * 3.6).toFixed(0)} km/h). ` +

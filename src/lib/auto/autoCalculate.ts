@@ -21,6 +21,7 @@ import { calculateGlulam } from '@/lib/calc/timber/glulam';
 import type { BeamInput } from '@/lib/calc/timber/beam';
 import type { GlulamBeamInput } from '@/lib/calc/timber/glulam';
 import { nextLargerProfile, KVH_PROFILES, BSH_PROFILES } from './standards';
+import { TIMBER_CLASSES, K_MOD, GAMMA_M } from '@/lib/calc/materials';
 
 // ─── Typen ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,19 @@ function isGlulamMaterial(material: string): boolean {
   return u.includes('GL') || u.includes('BSH') || u.includes('LEIMBINDER') || u.includes('BRETTSCHICHT');
 }
 
+/** Deckenbalken werden (historisch) als 'nebentraeger' erzeugt und über den
+ *  Namen identifiziert. Sie sind KEINE Dachbauteile: weder Dachüberstand noch
+ *  Kehlbalken/Zangen dürfen ihre Stützweite verändern. */
+function isDeckenbalken(m: TimberMember): boolean {
+  return m.name.startsWith('Deckenbalken');
+}
+
+/** Die Mauerbank (Fußpfette) liegt VOLLFLÄCHIG auf der Mauerkrone auf — sie hat
+ *  keine freie Stützweite und wird nicht auf Biegung bemessen. */
+function isMauerbank(m: TimberMember): boolean {
+  return m.type === 'pfette' && /mauerbank|fußpfette|fusspfette/i.test(m.name);
+}
+
 /** Gibt die Trägerstützweite in Metern zurück (Fallback auf geometrie-basierte Schätzung). */
 function resolveSpan(
   member: TimberMember, geometry: BuildingGeometry, supportSpacing = 4.0,
@@ -58,6 +72,15 @@ function resolveSpan(
   // NICHT die statische Stützweite. Stützweite = Stützenabstand ≈ Gebäudelänge / Feldanzahl.
   // supportSpacing ist im Tragwerk-Tab konfigurierbar (Default 4.0 m) — ein kleinerer
   // Abstand verkürzt die Pfettenstützweite und erlaubt einen schwächeren Querschnitt.
+  // Deckenbalken: Stützweite ist die Deckenspannweite, unabhängig von Dach-
+  // neigung, Dachüberstand und Kehlbalken/Zangen.
+  if (isDeckenbalken(member)) {
+    return member.length > 0 ? +member.length.toFixed(2) : +(geometry.width?.value ?? 8).toFixed(2);
+  }
+  // Mauerbank: liegt satt auf der Mauerkrone. Als "Stützweite" wird nur der
+  // Abstand der Verankerungspunkte (Sturmanker, ca. 1,5 m) angesetzt — sie
+  // spannt NICHT über die Gebäudelänge frei.
+  if (isMauerbank(member)) return 1.5;
   if (member.type === 'pfette') {
     const buildingLen = geometry.length?.value ?? 21.8;
     const numBays = Math.max(1, Math.ceil(buildingLen / supportSpacing));
@@ -90,14 +113,81 @@ function resolveSpan(
   }
 }
 
-/** Linienlast [kN/m] für einen Sparren (Eigengewicht + Schnee auf Schräge). */
+/** Linienlast [kN/m] für einen Sparren, ZERLEGT in die Sparrenachse.
+ *
+ *  Der Sparren ist ein SCHRÄGER Träger. Für das Biegemoment zählt nur der
+ *  Lastanteil SENKRECHT zur Sparrenachse; der Anteil längs der Achse wirkt als
+ *  Normalkraft (siehe sparrenNormalkraft).
+ *
+ *    g_k  [kN/m² Dachfläche]  → je m Sparren: g_k · e         → ⊥: × cos α
+ *    s_k  [kN/m² Grundriss]   → je m Sparren: s_k · e · cos α → ⊥: × cos α
+ *
+ *  Damit gilt M = q_⊥ · l_Schräge² / 8 — genau so, wie es ein Zimmermeister
+ *  mit der Sparrenlänge nachrechnet. (Vorher wurden horizontale Lasten mit der
+ *  Schräglänge kombiniert → Moment um 1/cos²α zu groß, bei 30° +33 %.)
+ */
 function sparrenLoad(gk: number, sk: number, spacing: number, roofPitch: number): { qg: number; qs: number } {
   const alpha = (roofPitch * Math.PI) / 180;
-  // Eigengewicht bezogen auf Dachfläche → Projektion auf Horizont: gk / cos(α) × spacing
-  const qg = (gk / Math.cos(alpha)) * spacing;
-  // Schneelast bereits horizontal (nach ÖNORM: auf Grundrissfläche)
-  const qs = sk * spacing;
-  return { qg, qs };
+  const cosA = Math.cos(alpha);
+  return {
+    qg: gk * spacing * cosA,
+    qs: sk * spacing * cosA * cosA,
+  };
+}
+
+/** Ergebnis der Traufschub-Ermittlung eines Gespärres. */
+interface Traufschub {
+  /** Horizontalschub am Auflager [kN] (Bemessungswert) */
+  H: number;
+  /** Vertikale Auflagerkraft je Sparrenfuß [kN] */
+  V: number;
+  /** Drucknormalkraft im Sparren [kN] */
+  N: number;
+  erklaerung: string;
+}
+
+/**
+ * Traufschub / Normalkraft eines Sparrens.
+ *
+ *  Sparren- und Kehlbalkendach sind Dreiecksbinder: das Dach drückt die Wände
+ *  auseinander. Der Horizontalschub H muss von Zangen / Kehlbalken / Decken-
+ *  balken als ZUG aufgenommen werden, und er läuft als DRUCK durch den Sparren.
+ *
+ *    q_v = vertikale Bemessungslast je m Grundriss und Sparren [kN/m]
+ *    V   = q_v · B / 2                (vertikale Auflagerkraft)
+ *    H   = q_v · B² / (8 · f)         (Dreigelenk-Analogie, f = Firsthöhe über Zugband)
+ *    N   = V · sin α + H · cos α      (Druck im Sparren am Fußpunkt)
+ *
+ *  Beim Pfettendach nehmen Pfetten und Steher die Vertikallast ab; es entsteht
+ *  kein Dreiecksschub, nur die Längskomponente der Dachlast.
+ */
+function sparrenNormalkraft(
+  gk: number, sk: number, spacing: number, roofPitch: number,
+  buildingWidth: number, rise: number, mitPfetten: boolean, slopeLen: number,
+): Traufschub {
+  const alpha = (roofPitch * Math.PI) / 180;
+  const cosA = Math.cos(alpha);
+  const sinA = Math.sin(alpha);
+  // Vertikale Bemessungslast je m Grundriss (Eigengewicht auf Dachfläche → /cos α)
+  const qv = 1.35 * (gk / Math.max(0.2, cosA)) * spacing + 1.5 * sk * spacing;
+
+  if (mitPfetten) {
+    // Pfettendach: nur die Längskomponente der Dachlast läuft bis zur Mauerbank
+    const N = qv * cosA * sinA * slopeLen;
+    return {
+      H: 0, V: qv * slopeLen * cosA / 2, N,
+      erklaerung: `Pfettendach: kein Dreiecksschub (Pfetten/Steher tragen vertikal ab). Längskraft im Sparren N = q_v·cos α·sin α·l = ${N.toFixed(1)} kN.`,
+    };
+  }
+
+  const f = Math.max(0.4, rise);
+  const V = (qv * buildingWidth) / 2;
+  const H = (qv * buildingWidth * buildingWidth) / (8 * f);
+  const N = V * sinA + H * cosA;
+  return {
+    H, V, N,
+    erklaerung: `Sparren-/Kehlbalkendach: q_v = ${qv.toFixed(2)} kN/m, B = ${buildingWidth.toFixed(2)} m, f = ${f.toFixed(2)} m → V = ${V.toFixed(1)} kN, Traufschub H = ${H.toFixed(1)} kN, Sparrendruck N = ${N.toFixed(1)} kN.`,
+  };
 }
 
 /** Linienlast [kN/m] für Pfetten.
@@ -134,22 +224,83 @@ function leimbinderLoad(gk: number, sk: number, pfettenSpan: number): { qg: numb
   };
 }
 
-/** Drucknormalkraft [kN] für Stütze (trägt halbe Pfettenspannweite × Belastung). */
-function stutzeNormalForce(gk: number, sk: number, tributaryArea: number): number {
-  const gGd = 1.35 * gk;
-  const qSd = 1.5 * sk;
-  return (gGd + qSd) * tributaryArea;
+/**
+ * Nachweis eines Zuggliedes (Zange / Kehlbalken) auf Zug + Biegung nach EC5 6.2.3.
+ *
+ *   σ_t,0,d = N_d / (k_A · A)      mit k_A = 0,85 (Schwächung durch Bolzen/Nägel)
+ *   σ_t,0,d / f_t,0,d + σ_m,d / f_m,d ≤ 1
+ *
+ * Es wird das ZANGENPAAR betrachtet: die Zugkraft teilt sich auf beide Hölzer.
+ */
+function checkZugglied(
+  b: number, h: number, timberClass: string, zugkraftPaar: number,
+  span: number, qg: number, qs: number,
+): { checks: MemberCalcEntry['checks']; eta: number; status: 'green' | 'yellow' | 'red'; erfBolzen: number } {
+  const mat = TIMBER_CLASSES[timberClass] ?? TIMBER_CLASSES.C24;
+  const kmod = K_MOD['1'].shortTerm;
+  const gammaM = GAMMA_M[mat.category];
+  const A = b * h;
+  const kA = 0.85;
+  const N_d = (zugkraftPaar / 2) * 1000;                     // N je Holz
+  const sigma_t = N_d / (kA * A);
+  const kh = h < 150 ? Math.min(1.3, Math.pow(150 / h, 0.2)) : 1;
+  const f_t0d = (kmod * mat.ft0k * kh) / gammaM;
+  const eta_t = sigma_t / f_t0d;
+
+  // Begleitende Biegung aus Eigengewicht über die halbe Zangenlänge
+  const q_d = 1.35 * qg + 1.5 * qs;
+  const M_d = (q_d * span * span) / 8;
+  const W = (b * h * h) / 6;
+  const sigma_m = (M_d * 1e6) / W;
+  const f_md = (kmod * mat.fmk * kh) / gammaM;
+  const eta_m = sigma_m / f_md;
+  const eta_komb = eta_t + eta_m;
+
+  // Anschluss: Tragfähigkeit eines Bolzens M12 im zweischnittigen Holz-Holz-
+  // Anschluss überschlägig 12 kN (ÖNORM EN 1995-1-1, Johansen).
+  const erfBolzen = Math.max(2, Math.ceil(zugkraftPaar / 12));
+
+  const st = (e: number): 'green' | 'yellow' | 'red' => e > 1 ? 'red' : e > 0.85 ? 'yellow' : 'green';
+  return {
+    eta: eta_komb,
+    status: st(eta_komb),
+    erfBolzen,
+    checks: [
+      {
+        name: 'Zug längs der Faser',
+        utilization: eta_t,
+        status: st(eta_t),
+        explanation: `Die Zange hält das Gespärre zusammen: sie nimmt den Traufschub als Zugkraft auf. N = ${zugkraftPaar.toFixed(1)} kN je Zangenpaar, also ${(zugkraftPaar / 2).toFixed(1)} kN je Holz. Mit 15 % Querschnittsschwächung durch die Bolzen: σ_t,0,d = ${sigma_t.toFixed(2)} N/mm² gegen f_t,0,d = ${f_t0d.toFixed(2)} N/mm².`,
+      },
+      {
+        name: 'Zug + Biegung',
+        utilization: eta_komb,
+        status: st(eta_komb),
+        explanation: `Zug und Biegung wirken gemeinsam (EC5 6.2.3): σ_t/f_t + σ_m/f_m = ${eta_t.toFixed(2)} + ${eta_m.toFixed(2)} = ${eta_komb.toFixed(2)}.`,
+      },
+      {
+        name: 'Anschluss Zange–Sparren',
+        utilization: 0,
+        status: 'green',
+        explanation: `Für ${zugkraftPaar.toFixed(1)} kN Zugkraft sind je Anschlusspunkt rechnerisch ${erfBolzen} Bolzen M12 (zweischnittig, ca. 12 kN je Bolzen) oder gleichwertige Vollgewindeschrauben erforderlich. Das ist der Punkt, an dem ein Sparrendach tatsächlich versagt — nicht das Holz selbst.`,
+      },
+    ],
+  };
 }
 
 // ─── Hauptfunktion ────────────────────────────────────────────────────────────
 
 export function autoCalculateAllMembers(
   members: TimberMember[],
-  loads: { gk: number; sk: number },
+  loads: { gk: number; sk: number; altitude?: number; wk_suction?: number },
   geometry: BuildingGeometry,
   sparrenSpacing: number,
   supportSpacing = 4.0,
 ): AutoCalculationResult {
+  // ÖNORM B 1995-1-1: Schnee ist bis 1000 m Seehöhe eine KURZE Einwirkung
+  // (k_mod 0,9), darüber eine MITTLERE (k_mod 0,8).
+  const schneeDauer: BeamInput['variableDuration'] =
+    (loads.altitude ?? 0) > 1000 ? 'mediumTerm' : 'shortTerm';
   const assumptions: AutoAssumption[] = [];
   const resultMembers: MemberCalcEntry[] = [];
   const optimizedMembers: TimberMember[] = [];
@@ -185,6 +336,31 @@ export function autoCalculateAllMembers(
   const hasKehl = members.some(m => m.type === 'kehlbalken');
   const hasZange = members.some(m => m.type === 'zange');
   const kehlFactor = hasKehl ? 0.7 : hasZange ? 0.85 : 1;
+
+  // ── Tragsystem erkennen → Traufschub / Normalkräfte ───────────────────────
+  // Ein Gespärre-Dach (Sparren-/Kehlbalkendach) hat KEINE tragende First-/
+  // Mittelpfette; dort entsteht Traufschub, den Zangen/Kehlbalken abfangen.
+  const hasTragendePfette = members.some(m => m.type === 'pfette' && /first|mittel/i.test(m.name));
+  const istGespaerre = !hasTragendePfette && (hasZange || hasKehl);
+  const rise = Math.max(0.1, (geometry.ridgeHeight?.value ?? 6) - (geometry.eavesHeight?.value ?? 4));
+  const schub = sparrenNormalkraft(
+    loads.gk, loads.sk, sparrenSpacing, roofPitch,
+    buildingWidth, rise, !istGespaerre, sparrenLaenge,
+  );
+  assumptions.push({
+    field: 'tragwerk.normalkraft',
+    value: `N = ${schub.N.toFixed(1)} kN${schub.H > 0 ? `, H = ${schub.H.toFixed(1)} kN` : ''}`,
+    reason: schub.erklaerung,
+    source: 'derived',
+  });
+
+  // Zugband-Kräfte: der Traufschub aller Gespärre verteilt sich auf die
+  // vorhandenen Zangen-/Kehlbalkenpaare.
+  const sparrenStk = members.filter(m => m.type === 'sparren').reduce((s, m) => s + m.quantity, 0);
+  const zugbandStk = members.filter(m => m.type === 'zange' || m.type === 'kehlbalken').reduce((s, m) => s + m.quantity, 0);
+  const gespaerreAnzahl = Math.max(1, Math.round(sparrenStk / 2));
+  const zugbandPaare = Math.max(1, Math.round(zugbandStk / 2));
+  const zugkraftProPaar = istGespaerre ? schub.H * (gespaerreAnzahl / zugbandPaare) : 0;
   if (kehlFactor < 1) {
     assumptions.push({
       field: 'sparren.stuetzweite',
@@ -205,15 +381,28 @@ export function autoCalculateAllMembers(
       let qs = 0;
       let N_Ed = 0;
       let isColumn = false;
+      /** Drucknormalkraft im Biegestab [kN] (Sparren) */
+      let nAxial = 0;
+      /** Abstand der seitlichen Halterung [m] (Lattung/Schalung) */
+      let lateralSupport: number | undefined;
+      /** Zugglied (Zange/Kehlbalken) → eigener Zugnachweis statt Biegeoptimierung */
+      let isTie = false;
+      let zugkraft = 0;
+      /** Lasteinwirkungsdauer der veränderlichen Hauptlast (bestimmt k_mod) */
+      let duration: BeamInput['variableDuration'] = schneeDauer;
 
       switch (member.type) {
         case 'sparren': {
           const l = sparrenLoad(loads.gk, loads.sk, sparrenSpacing, roofPitch);
           qg = l.qg; qs = l.qs;
+          nAxial = schub.N;
+          // Dachlattung/Vollschalung halten den Sparren in der Dachebene:
+          // Knicklänge quer zur Dachebene konservativ 1,0 m.
+          lateralSupport = 1.0;
           assumptions.push({
             field: `${member.name}.last`,
-            value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
-            reason: `Sparren: Last = (gk/cos(α) + sk) × Sparrenabstand ${sparrenSpacing} m`,
+            value: `q⊥,g=${qg.toFixed(2)} kN/m, q⊥,s=${qs.toFixed(2)} kN/m, N=${nAxial.toFixed(1)} kN`,
+            reason: `Sparren (schräger Träger): Lasten senkrecht zur Sparrenachse zerlegt — g = gk·e·cos α, s = sk·e·cos²α bei α = ${roofPitch}° und Sparrenabstand ${sparrenSpacing} m. Der Längsanteil wirkt als Normalkraft N = ${nAxial.toFixed(1)} kN (Nachweis Druck + Biegung).`,
             source: 'derived',
           });
           break;
@@ -230,12 +419,19 @@ export function autoCalculateAllMembers(
           break;
         }
         case 'kehlbalken': {
+          // Kehlbalken sind primär Druck-/Zugglieder des Gespärres. Wenn ein
+          // Traufschub ermittelt wurde, wird dieser als Zugkraft nachgewiesen;
+          // zusätzlich wirkt Eigengewicht (und ggf. begehbarer Dachboden).
           const l = kehlbalkenLoad(loads.gk, loads.sk, sparrenSpacing);
           qg = l.qg; qs = l.qs;
+          if (zugkraftProPaar > 0) {
+            isTie = true;
+            zugkraft = zugkraftProPaar;
+          }
           assumptions.push({
             field: `${member.name}.last`,
-            value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
-            reason: 'Kehlbalken: vereinfacht 50% der Sparrenlast als Querlast angenommen',
+            value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m${zugkraftProPaar > 0 ? `, N_Zug=${zugkraftProPaar.toFixed(1)} kN` : ''}`,
+            reason: `Kehlbalken: 50 % der Sparrenlast als Querlast${zugkraftProPaar > 0 ? ` + Traufschub ${zugkraftProPaar.toFixed(1)} kN als Zugkraft` : ''}`,
             source: 'derived',
           });
           break;
@@ -253,47 +449,51 @@ export function autoCalculateAllMembers(
         }
         case 'stuetze': {
           isColumn = true;
-          // Tributarfläche: halbe Pfettenspannweite × Pfettenabstand
-          const tribArea = (pfettenSpan / 2) * sparrenSpacing;
-          N_Ed = stutzeNormalForce(loads.gk, loads.sk, tribArea);
+          // Ein Steher trägt das Stück Mittel-/Firstpfette zwischen den
+          // Nachbarstehern (= Stützenabstand) mal der Lasteinzugsbreite der
+          // Pfette (= halbe Sparrenlänge). Vorher wurde fälschlich der
+          // Sparrenabstand (0,8 m) statt des Stützenabstands eingesetzt —
+          // die Steherlast war dadurch um ein Vielfaches zu klein.
+          const alphaR = (roofPitch * Math.PI) / 180;
+          const einzugSchraege = sparrenLaenge / 2;              // m entlang Dachfläche
+          const tribDach = supportSpacing * einzugSchraege;      // m² Dachfläche (für gk)
+          const tribGrund = supportSpacing * einzugSchraege * Math.cos(alphaR); // m² Grundriss (für sk)
+          N_Ed = 1.35 * loads.gk * tribDach + 1.5 * loads.sk * tribGrund;
           assumptions.push({
             field: `${member.name}.last`,
             value: `N_Ed=${N_Ed.toFixed(1)} kN`,
-            reason: `Stütze: Tributarfläche = (pfettenSpan/2) × sparrenAbstand = ${tribArea.toFixed(2)} m², N_Ed aus ULS-Kombination`,
+            reason: `Steher: Lasteinzug = Stützenabstand ${supportSpacing.toFixed(2)} m × halbe Sparrenlänge ${einzugSchraege.toFixed(2)} m = ${tribDach.toFixed(2)} m² Dachfläche (${tribGrund.toFixed(2)} m² Grundriss für Schnee). N_Ed = 1,35·g + 1,5·s.`,
             source: 'derived',
           });
           break;
         }
         case 'zange': {
-          // Zangen sind ZUG-/Aussteifungsglieder — sie tragen KEINE Dachfläche.
-          // Als Biegeträger über die volle Länge gerechnet würden sie absurd
-          // groß (und teuer) dimensioniert. Ansatz: nur Eigengewicht + kleine
-          // Montagelast, Stützweite = halbe Zangenlänge (durch Gegenzange/
-          // Sparren gehalten). Der Zugnachweis ist für 6/16 C24 unkritisch.
-          qg = 0.15; // kN/m Eigengewicht + Zuschlag
+          // Zangen sind ZUGGLIEDER: sie fangen den Traufschub des Gespärres ab
+          // und tragen KEINE Dachfläche. Sie werden auf Zug nachgewiesen, nicht
+          // als Biegeträger (das würde absurd große Querschnitte liefern).
+          isTie = true;
+          zugkraft = zugkraftProPaar;
+          qg = 0.15; // Eigengewicht + Montagelast
           qs = 0.1;
-          assumptions.push({
-            field: `${member.name}.last`,
-            value: 'Zugglied',
-            reason: 'Zange: Zug-/Aussteifungsglied ohne Dachflächenlast — nur Eigengewicht angesetzt, Querschnitt 6/16 konstruktiv (Zugnachweis unkritisch).',
-            source: 'standard',
-          });
           break;
         }
         case 'rahm':
         case 'auswechslung':
         case 'nebentraeger': {
           // Deckenbalken: eigene Nutzlast statt Schneelast
-          if (member.name.startsWith('Deckenbalken')) {
+          if (isDeckenbalken(member)) {
             const isSpitzboden = member.name.includes('Spitzboden');
             const qk = isSpitzboden ? 1.0 : 2.0; // kN/m² Nutzlast
             const beamSpacing = 0.8; // Standard-Achsabstand
             qg = 1.5 * beamSpacing; // Eigengewicht Deckenaufbau ~1.5 kN/m²
             qs = qk * beamSpacing;
+            // Nutzlast im Wohnbau ist MITTELFRISTIG (k_mod 0,8), nicht kurz —
+            // sonst wird die Decke rund 12 % zu günstig gerechnet.
+            duration = 'mediumTerm';
             assumptions.push({
               field: `${member.name}.last`,
               value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
-              reason: `Deckenbalken: Eigengewicht 1.5 kN/m² + Nutzlast ${qk} kN/m² (${isSpitzboden ? 'Spitzboden' : 'Wohnen'}) × Achsabstand ${beamSpacing} m`,
+              reason: `Deckenbalken: Eigengewicht 1.5 kN/m² + Nutzlast ${qk} kN/m² (${isSpitzboden ? 'Spitzboden' : 'Wohnen'}) × Achsabstand ${beamSpacing} m, Stützweite ${span.toFixed(2)} m (Deckenspannweite), Lasteinwirkungsdauer mittel (k_mod 0,8).`,
               source: 'standard',
             });
           } else {
@@ -318,7 +518,99 @@ export function autoCalculateAllMembers(
 
       // ── Bemessung ─────────────────────────────────────────────────────────
 
-      if (isColumn) {
+      if (isMauerbank(member)) {
+        // ── Mauerbank (Fußpfette) ───────────────────────────────────────────
+        // Liegt vollflächig auf der Mauerkrone und wird NICHT auf Biegung
+        // bemessen. Maßgebend ist der Querdruck aus dem Sparrenfuß (Holz ist
+        // quer zur Faser weich) und die Verankerung gegen Windsog. Der
+        // Querschnitt ist konstruktiv (üblich 12/12 bis 16/12) und darf vom
+        // Optimierer nicht auf ein Sparrenprofil heruntergerechnet werden.
+        const mbB = member.width > 0 ? member.width : 140;
+        const mbH = member.height > 0 ? member.height : 100;
+        const mat = TIMBER_CLASSES.C24;
+        const f_c90d = (K_MOD['1'].shortTerm * mat.fc90k) / GAMMA_M.solid;
+        const kc90 = 1.5;
+        // Auflagerfläche Sparrenfuß: Sparrenbreite × Kervenlänge (≈ 120 mm)
+        const sparrenB = members.find(m => m.type === 'sparren')?.width || 80;
+        const auflagerA = sparrenB * 120;
+        const V_fuss = schub.V > 0 ? schub.V : 1;
+        const sigma_c90 = (V_fuss * 1000) / auflagerA;
+        const etaMB = sigma_c90 / (kc90 * f_c90d);
+        const stMB: 'green' | 'yellow' | 'red' = etaMB > 1 ? 'red' : etaMB > 0.85 ? 'yellow' : 'green';
+
+        resultMembers.push({
+          member,
+          section: { b: mbB, h: mbH, label: `${mbB / 10}/${mbH / 10}` },
+          timberClass: 'C24',
+          maxUtilization: etaMB,
+          overallStatus: stMB,
+          summary: `Mauerbank ${mbB / 10}/${mbH / 10} C24 konstruktiv auf der Mauerkrone. Maßgebend ist der Querdruck aus dem Sparrenfuß: η = ${etaMB.toFixed(2)}.`,
+          checks: [{
+            name: 'Querdruck aus Sparrenfuß',
+            utilization: etaMB,
+            status: stMB,
+            explanation: `Jeder Sparren drückt mit ${V_fuss.toFixed(1)} kN auf die Mauerbank. Quer zur Faser ist Holz viel weicher als längs. Auflagerfläche = Sparrenbreite ${sparrenB} mm × Kerve 120 mm → σ_c,90,d = ${sigma_c90.toFixed(2)} N/mm² gegen k_c,90·f_c,90,d = ${(kc90 * f_c90d).toFixed(2)} N/mm². Die Mauerbank spannt NICHT frei, sie liegt satt auf der Mauerkrone auf.`,
+          }, {
+            name: 'Verankerung in der Mauerkrone',
+            utilization: 0,
+            status: 'green',
+            explanation: `Die Mauerbank ist mit Ankerschrauben oder Gewindestangen in der Mauerkrone zu verankern (üblich alle 1,5 m, mindestens 2 Stück je Wandabschnitt). Sie überträgt Windsog und Traufschub in das Mauerwerk.`,
+          }],
+        });
+        optimizedMembers.push({
+          ...member,
+          width: mbB, height: mbH,
+          crossSection: `${mbB / 10}/${mbH / 10}`,
+          material: 'C24',
+          calculationStatus: stMB,
+        });
+
+      } else if (isTie) {
+        // ── Zugglied (Zange / Kehlbalken): Zug + Biegung statt Biegeoptimierung ──
+        let tb = member.width > 0 ? member.width : 60;
+        let th = member.height > 0 ? member.height : 160;
+        let tie = checkZugglied(tb, th, 'C24', zugkraft, span, qg, qs);
+
+        // Falls der Zugnachweis nicht reicht: Querschnitt hochstufen
+        for (let iter = 0; iter < 6 && tie.eta > 0.95; iter++) {
+          const next = nextLargerProfile({ b: tb, h: th }, false);
+          if (!next) break;
+          assumptions.push({
+            field: `iteration.${member.id ?? member.name}.${iter + 1}`,
+            value: `${tb}/${th}→${next.label} mm bei η=${tie.eta.toFixed(2)}`,
+            reason: `Zugnachweis der Zange nicht erfüllt → Querschnitt hochgestuft`,
+            source: 'derived',
+          });
+          tb = next.b; th = next.h;
+          tie = checkZugglied(tb, th, 'C24', zugkraft, span, qg, qs);
+        }
+
+        assumptions.push({
+          field: `${member.name}.last`,
+          value: `N_Zug = ${zugkraft.toFixed(1)} kN je Paar`,
+          reason: `Zange als Zugglied: der Traufschub von ${gespaerreAnzahl} Gespärren verteilt sich auf ${zugbandPaare} Zangenpaare → ${zugkraft.toFixed(1)} kN je Paar. Anschluss: ${tie.erfBolzen} Bolzen M12 je Anschlusspunkt.`,
+          source: 'derived',
+        });
+
+        resultMembers.push({
+          member,
+          section: { b: tb, h: th, label: `${tb / 10}/${th / 10}` },
+          timberClass: 'C24',
+          maxUtilization: tie.eta,
+          overallStatus: tie.status,
+          summary: `Zange ${tb / 10}/${th / 10} C24 als Zugglied: N = ${zugkraft.toFixed(1)} kN je Paar, η = ${tie.eta.toFixed(2)}. Anschluss mit ${tie.erfBolzen} Bolzen M12 je Punkt.`,
+          checks: tie.checks,
+        });
+        optimizedMembers.push({
+          ...member,
+          width: tb,
+          height: th,
+          crossSection: `${tb / 10}/${th / 10}`,
+          material: 'C24',
+          calculationStatus: tie.status,
+        });
+
+      } else if (isColumn) {
         // Stütze: direkter Knicknachweis mit vorhandenem Querschnitt
         const colB = member.width  > 0 ? member.width  : 120;
         const colH = member.height > 0 ? member.height : 160;
@@ -366,7 +658,7 @@ export function autoCalculateAllMembers(
           span,
           qPermanent: qg,
           qVariable: qs,
-          variableDuration: 'shortTerm',
+          variableDuration: duration,
           serviceClass: '1',
           shape,
           preferredClasses: ['GL24h', 'GL28h'],
@@ -517,8 +809,11 @@ export function autoCalculateAllMembers(
           span,
           qPermanent: qg,
           qVariable: qs,
-          variableDuration: 'shortTerm',
+          variableDuration: duration,
           serviceClass: '1',
+          N_Ed: nAxial,
+          lateralSupport,
+          inclination: member.type === 'sparren' ? roofPitch : undefined,
           preferredClasses: ['C24', 'C30'],
         };
 
@@ -677,6 +972,46 @@ export function autoCalculateAllMembers(
         source: 'fallback',
       });
     }
+  }
+
+  // ── Abhebenachweis (Windsog) ──────────────────────────────────────────────
+  // ÖNORM B 1991-1-4 / EN 1990: für das Abheben ist das Eigengewicht GÜNSTIG,
+  // also mit γ_G = 1,0 anzusetzen, der Sog mit γ_Q = 1,5. Der Sog wirkt
+  // senkrecht zur Dachhaut, vom Eigengewicht hält nur die Normalkomponente
+  // (g·cos α) dagegen. Ohne diesen Nachweis wurden Sturmanker bisher blind
+  // mitverrechnet, ohne dass je geprüft wurde, ob das Dach überhaupt abhebt.
+  const wSog = Math.abs(loads.wk_suction ?? 0);
+  if (wSog > 0) {
+    const alphaR = (roofPitch * Math.PI) / 180;
+    const sogD = 1.5 * wSog;                            // kN/m² Dachfläche
+    const haltD = 1.0 * loads.gk * Math.cos(alphaR);    // kN/m² Dachfläche
+    const netto = sogD - haltD;                         // > 0 → Dach hebt ab
+    // Auflagerkraft je Sparrenfuß: halbe Sparrenlast auf die Traufe
+    const F_ab = +(netto * sparrenSpacing * sparrenLaenge / 2).toFixed(2);
+    // Sturmanker/Winkelverbinder tragen überschlägig 5 kN je Stück (Nagelbild)
+    const ankerJeSparren = F_ab > 0 ? Math.max(1, Math.ceil(F_ab / 5)) : 0;
+    const eta = haltD > 0 ? sogD / haltD : 9.99;
+
+    for (const entry of resultMembers) {
+      if (entry.member.type !== 'sparren') continue;
+      entry.checks.push({
+        name: 'Abhebesicherung (Windsog)',
+        utilization: F_ab > 0 ? Math.min(0.99, eta / 3) : 0,
+        status: 'green',
+        explanation: F_ab > 0
+          ? `Windsog ${wSog.toFixed(2)} kN/m² × 1,5 = ${sogD.toFixed(2)} kN/m² gegen Eigengewicht ${loads.gk.toFixed(2)} × cos ${roofPitch}° = ${haltD.toFixed(2)} kN/m² (γ_G = 1,0, weil günstig). Das Dach hebt mit ${netto.toFixed(2)} kN/m² ab → ${F_ab.toFixed(1)} kN Zug je Sparrenfuß. Erforderlich: ${ankerJeSparren} Sturmanker bzw. Winkelverbinder je Sparren, durchgehend bis in die Mauerbank und von dort in die Mauerkrone verankert.`
+          : `Windsog ${wSog.toFixed(2)} kN/m² × 1,5 = ${sogD.toFixed(2)} kN/m² ist kleiner als das haltende Eigengewicht ${haltD.toFixed(2)} kN/m². Das Dach hebt rechnerisch nicht ab; Sturmanker trotzdem konstruktiv setzen (1 Stk je Sparren).`,
+      });
+    }
+
+    assumptions.push({
+      field: 'tragwerk.abhebesicherung',
+      value: F_ab > 0 ? `${F_ab.toFixed(1)} kN je Sparrenfuß → ${ankerJeSparren} Anker` : 'kein Abheben',
+      reason: F_ab > 0
+        ? `Abhebenachweis: 1,5·Sog − 1,0·g·cos α = ${netto.toFixed(2)} kN/m² → ${F_ab.toFixed(1)} kN Zug je Sparrenfuß, ${ankerJeSparren} Sturmanker je Sparren erforderlich.`
+        : `Abhebenachweis erfüllt: das Eigengewicht (${haltD.toFixed(2)} kN/m²) hält den Windsog (${sogD.toFixed(2)} kN/m²) nieder. Sturmanker konstruktiv.`,
+      source: 'derived',
+    });
   }
 
   return {

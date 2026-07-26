@@ -57,8 +57,12 @@ describe('supportSpacing — reduziert die statische Pfettenstützweite (autoCal
     const wideResult = autoCalculateAllMembers(members, loads, geometry, 0.8, 4.0);
     const narrowResult = autoCalculateAllMembers(members, loads, geometry, 0.8, 2.0);
 
-    const widePfette = wideResult.members.find(m => m.member.type === 'pfette');
-    const narrowPfette = narrowResult.members.find(m => m.member.type === 'pfette');
+    // Nur echte First-/Mittelpfetten — die Mauerbank liegt satt auf der
+    // Mauerkrone und hat gar keine freie Stützweite.
+    const istTragendePfette = (m: { member: { type: string; name: string } }) =>
+      m.member.type === 'pfette' && /first|mittel/i.test(m.member.name);
+    const widePfette = wideResult.members.find(istTragendePfette);
+    const narrowPfette = narrowResult.members.find(istTragendePfette);
     expect(widePfette).toBeDefined();
     expect(narrowPfette).toBeDefined();
     // Kürzere Stützweite → geringeres Biegemoment → geringere max. Ausnutzung

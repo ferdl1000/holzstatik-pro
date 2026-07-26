@@ -58,12 +58,27 @@ function applyUserConfirmedLoads(computed: LoadCase[], existing: LoadCase[] | un
   if (confirmedByType.size === 0) return computed;
 
   let windDruckHandled = false;
+  let snowSymHandled = false;
   return computed.map((lc) => {
     if (lc.type === 'wind' && lc.value < 0) return lc; // Sog nie mit Druck-Bestätigung überschreiben
     const isWindDruck = lc.type === 'wind' && !windDruckHandled;
     const confirmed = confirmedByType.get(lc.type);
     if (!confirmed || (lc.type === 'wind' && !isWindDruck)) return lc;
     if (lc.type === 'wind') windDruckHandled = true;
+    // Schnee: der bestätigte Wert ist der SYMMETRISCHE Lastfall. Der einseitige
+    // (verwehte) Lastfall wird daraus abgeleitet (luv 50 % / lee 100 %) statt
+    // stur gleichgesetzt — sonst verliert er seine normative Beziehung.
+    if (lc.type === 'snow') {
+      if (snowSymHandled) {
+        return {
+          ...lc,
+          value: confirmed.value,
+          parameters: { ...lc.parameters, windward: +(0.5 * confirmed.value).toFixed(2), leeward: confirmed.value },
+          source: `${lc.source} — aus dem bestätigten symmetrischen Wert ${confirmed.value} ${confirmed.unit} abgeleitet`,
+        };
+      }
+      snowSymHandled = true;
+    }
     return {
       ...lc,
       value: confirmed.value,

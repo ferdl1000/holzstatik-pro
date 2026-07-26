@@ -79,7 +79,8 @@ export const DEFAULT_PRICES: PriceItem[] = [
 export interface PricingFactors {
   /** Verschnitt bei Holz [%], typisch 8-15 % */
   wasteTimber: number;
-  /** Lohnaufschlag auf Material [%], typisch 30-60 % bei Eigenleistung Zimmerei */
+  /** Lohnzuschlag auf die Lohnpositionen [%] — Erschwernis, Zulagen, Höhenarbeit.
+   *  0 = keine Zuschläge (die Stundensätze sind bereits Verrechnungssätze). */
   laborMarkup: number;
   /** Gemeinkostenaufschlag [%], typisch 15-25 % */
   overhead: number;
@@ -91,7 +92,7 @@ export interface PricingFactors {
 
 export const DEFAULT_FACTORS: PricingFactors = {
   wasteTimber: 8,   // Quelle: AT-Zimmerei-Praxis 2026 (KVH-Verschnitt realistisch 6–10%)
-  laborMarkup: 45,  // Quelle: AT-Holzbau-Verbandskennwerte 2026 (Lohn-Material-Verhältnis)
+  laborMarkup: 0,   // Stundensätze sind bereits Verrechnungssätze — Zuschlag nur bei Erschwernis
   overhead: 18,     // Quelle: AT-Zimmerei-Betriebskostenanalyse 2026
   profit: 7,        // Quelle: AT-Baugewerbe-Marktübersicht 2026 (Unternehmergewinn)
   vat: 20,          // Österreich Standard (unverändert)

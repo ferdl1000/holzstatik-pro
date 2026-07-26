@@ -1,4 +1,4 @@
-import type { Project } from '@/types/project';
+import type { Project, TimberMember } from '@/types/project';
 
 interface RoofVisualizationProps {
   project: Project;
@@ -14,7 +14,6 @@ const POS_PREFIX: Record<string, string> = {
 
 export function RoofVisualization({ project, width = 700, height = 400, showPositions = true }: RoofVisualizationProps) {
   const geo = project.geometry;
-  const sys = project.structuralSystem;
 
   if (!geo || geo.width.value <= 0 || geo.eavesHeight.value <= 0) {
     return (
@@ -46,11 +45,19 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
   const px = (x: number) => ox + x * scale;
   const py = (y: number) => oy - y * scale;
 
-  const hasMittelpfette = sys?.type === 'pfettendach_mittelpfette';
-  const hasCentralPost = sys?.type === 'pfettendach' || sys?.type === 'pfettendach_mittelpfette';
-  const hasKehlbalken = sys?.type === 'kehlbalkendach';
+  // Was gezeichnet wird, entscheidet die ECHTE Bauteilliste — nicht der Tragsystem-Typ.
+  // So kann nie eine Mittelpfette/ein Steher im Schnitt stehen, den es in members nicht gibt.
+  const members: TimberMember[] = project.members ?? [];
+  const pfetten = members.filter((m) => m.type === 'pfette');
+  const hasFirstpfette = pfetten.some((m) => /first/i.test(m.name));
+  const hasMittelpfette = pfetten.some((m) => /mittel/i.test(m.name));
+  const hasFusspfette = pfetten.some((m) => /fuss|fuß|mauerbank/i.test(m.name));
+  const hasStuetzen = members.some((m) => m.type === 'stuetze');
+  const hasCentralPost = hasFirstpfette && hasStuetzen;
+  const hasKehlbalken = members.some((m) => m.type === 'kehlbalken');
 
-  const sparrenAbstand = 0.8;
+  // Sparrenabstand aus dem Plan, sonst Zimmerer-Default 0,80 m — nicht hartcodieren.
+  const sparrenAbstand = project.sparrenSpacing && project.sparrenSpacing > 0 ? project.sparrenSpacing : 0.8;
   const numSparren = Math.max(1, Math.floor(buildingWidth / 2 / sparrenAbstand));
 
   const pfetteY = eavesH + roofH * 0.5;
@@ -63,21 +70,24 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
   const supportColor = 'hsl(var(--accent))';
   const labelBg = 'hsl(var(--card))';
 
-  const PosLabel = ({ x, y, text, anchor = 'middle' }: { x: number; y: number; text: string; anchor?: string }) => (
-    showPositions ? (
+  const PosLabel = ({ x, y, text, anchor = 'middle' }: { x: number; y: number; text: string; anchor?: string }) => {
+    if (!showPositions || !text) return null;
+    // Breite aus der echten Textlänge — Positionsnummern werden mit der Bauteilzahl länger.
+    const boxW = Math.max(44, text.length * 5.4 + 10);
+    return (
       <g>
-        <rect x={x - (anchor === 'middle' ? 22 : anchor === 'end' ? 44 : 0)} y={y - 8} width={44} height={14} rx={2}
+        <rect x={x - (anchor === 'middle' ? boxW / 2 : anchor === 'end' ? boxW : 0)} y={y - 8} width={boxW} height={14} rx={2}
           fill={labelBg} stroke={memberColor} strokeWidth={0.5} opacity={0.9} />
         <text x={x} y={y + 3} textAnchor={anchor}
           className="text-[8px] fill-primary font-mono font-bold">{text}</text>
       </g>
-    ) : null
-  );
+    );
+  };
 
   // Build position counters from project.members
   const posMap: Record<string, string> = {};
   const typeCount: Record<string, number> = {};
-  for (const m of project.members) {
+  for (const m of members) {
     const prefix = POS_PREFIX[m.type] || 'XX';
     typeCount[prefix] = (typeCount[prefix] || 0) + 1;
     posMap[m.type + '-' + m.id] = `${prefix}-${String(typeCount[prefix]).padStart(2, '0')}`;
@@ -86,6 +96,14 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
     const entry = Object.entries(posMap).find(([k]) => k.startsWith(type + '-'));
     return entry ? entry[1] : '';
   };
+  /** Positionsnummer des tatsächlich gemeinten Bauteils (nicht nur des ersten seines Typs). */
+  const posOfMember = (pred: (m: TimberMember) => boolean) => {
+    const m = members.find(pred);
+    return m ? posMap[m.type + '-' + m.id] || '' : '';
+  };
+  const posFirstpfette = posOfMember((m) => m.type === 'pfette' && /first/i.test(m.name));
+  const posMittelpfette = posOfMember((m) => m.type === 'pfette' && /mittel/i.test(m.name));
+  const posFusspfette = posOfMember((m) => m.type === 'pfette' && /fuss|fuß|mauerbank/i.test(m.name));
 
   return (
     <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-full" style={{ maxHeight: height }}>
@@ -121,34 +139,53 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
       })}
       {posOf('sparren') && <PosLabel x={px(buildingWidth * 0.18)} y={py(eavesH + roofH * 0.15)} text={posOf('sparren')} />}
 
-      {/* Firstpfette */}
-      <circle cx={px(buildingWidth / 2)} cy={py(ridgeH)} r={5} fill={supportColor} />
-      {posOf('pfette') && <PosLabel x={px(buildingWidth / 2)} y={py(ridgeH) - 14} text={posOf('pfette')} />}
+      {/* Firstpfette — nur wenn sie in der Bauteilliste steht (Sparren-/Kehlbalkendach hat keine) */}
+      {hasFirstpfette && (
+        <>
+          <circle cx={px(buildingWidth / 2)} cy={py(ridgeH)} r={5} fill={supportColor} />
+          <PosLabel x={px(buildingWidth / 2)} y={py(ridgeH) - 14} text={posFirstpfette} />
+        </>
+      )}
 
-      {/* Fußpfetten */}
-      <circle cx={px(0)} cy={py(eavesH)} r={5} fill={supportColor} />
-      <circle cx={px(buildingWidth)} cy={py(eavesH)} r={5} fill={supportColor} />
+      {/* Fußpfetten (Mauerbank) — liegen auf der Mauerkrone */}
+      {hasFusspfette && (
+        <>
+          <circle cx={px(0)} cy={py(eavesH)} r={5} fill={supportColor} />
+          <circle cx={px(buildingWidth)} cy={py(eavesH)} r={5} fill={supportColor} />
+          <PosLabel x={px(buildingWidth) - 8} y={py(eavesH) - 12} text={posFusspfette} anchor="end" />
+        </>
+      )}
 
       {/* Mittelpfetten */}
       {hasMittelpfette && (
         <>
           <circle cx={px(pfetteXLeft)} cy={py(pfetteY)} r={5} fill={supportColor} />
           <circle cx={px(pfetteXRight)} cy={py(pfetteY)} r={5} fill={supportColor} />
-          <line x1={px(pfetteXLeft)} y1={py(0)} x2={px(pfetteXLeft)} y2={py(pfetteY)} stroke={memberColor} strokeWidth={2} strokeDasharray="6 3" />
-          <line x1={px(pfetteXRight)} y1={py(0)} x2={px(pfetteXRight)} y2={py(pfetteY)} stroke={memberColor} strokeWidth={2} strokeDasharray="6 3" />
-          {posOf('stuetze') && <PosLabel x={px(pfetteXLeft) + 24} y={py(pfetteY * 0.3)} text={posOf('stuetze')} anchor="start" />}
+          <PosLabel x={px(pfetteXLeft)} y={py(pfetteY) - 12} text={posMittelpfette} />
         </>
       )}
 
-      {/* Firststütze */}
+      {/* Steher unter den Mittelpfetten — nur wenn Stützen in der Bauteilliste stehen */}
+      {hasMittelpfette && hasStuetzen && (
+        <>
+          <line x1={px(pfetteXLeft)} y1={py(0)} x2={px(pfetteXLeft)} y2={py(pfetteY)} stroke={memberColor} strokeWidth={2} strokeDasharray="6 3" />
+          <line x1={px(pfetteXRight)} y1={py(0)} x2={px(pfetteXRight)} y2={py(pfetteY)} stroke={memberColor} strokeWidth={2} strokeDasharray="6 3" />
+          <PosLabel x={px(pfetteXLeft) + 24} y={py(pfetteY * 0.3)} text={posOf('stuetze')} anchor="start" />
+        </>
+      )}
+
+      {/* Firststütze — nur bei Firstpfette MIT Stehern */}
       {hasCentralPost && (
         <line x1={px(buildingWidth / 2)} y1={py(0)} x2={px(buildingWidth / 2)} y2={py(ridgeH)} stroke={memberColor} strokeWidth={2} strokeDasharray="6 3" />
       )}
 
       {/* Kehlbalken */}
       {hasKehlbalken && (
-        <line x1={px(buildingWidth * 0.2)} y1={py(eavesH + roofH * 0.4)}
-          x2={px(buildingWidth * 0.8)} y2={py(eavesH + roofH * 0.4)} stroke={memberColor} strokeWidth={2} />
+        <>
+          <line x1={px(buildingWidth * 0.2)} y1={py(eavesH + roofH * 0.4)}
+            x2={px(buildingWidth * 0.8)} y2={py(eavesH + roofH * 0.4)} stroke={memberColor} strokeWidth={2} />
+          <PosLabel x={px(buildingWidth * 0.5)} y={py(eavesH + roofH * 0.4) - 8} text={posOf('kehlbalken')} />
+        </>
       )}
 
       {/* Auflager */}

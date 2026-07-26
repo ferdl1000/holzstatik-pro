@@ -39,6 +39,12 @@ export interface BeamInput {
   deflectionLimitInst?: number;   // Default l/300
   deflectionLimitFin?: number;    // Default l/200
   inclination?: number;      // Dachneigung [°] (für Sparren mit Schrägstellung)
+  /** Drucknormalkraft [kN] in Stabachse (Sparren im Sparrendach: Traufschub/cos α).
+   *  Löst den Kombinationsnachweis Druck + Biegung nach EC5 6.3.2 aus. */
+  N_Ed?: number;
+  /** Abstand der seitlichen Halterung [m] (Lattung/Schalung halten den Sparren
+   *  in Dachebene). Default: volle Stützweite (konservativ). */
+  lateralSupport?: number;
 }
 
 export interface CheckResult {
@@ -71,8 +77,20 @@ export function calculateBeam(input: BeamInput): BeamResult {
   const sec = rectangular(input.b, input.h);
   const gammaM = GAMMA_M[mat.category];
 
-  // Bemessungslasten ULS
-  const q_d = 1.35 * input.qPermanent + 1.50 * input.qVariable;       // kN/m
+  // ── Maßgebende Lastkombination nach EC5 ──────────────────────────────────
+  // Jede Kombination hat ihren EIGENEN k_mod (Lastdauer der kürzesten
+  // beteiligten Einwirkung). Maßgebend ist die Kombination mit dem größten
+  // Verhältnis q_d / k_mod — nur so wird der Nachweis wirklich richtig.
+  const kmodPerm = K_MOD[input.serviceClass].permanent;
+  const kmodVar = K_MOD[input.serviceClass][input.variableDuration];
+  const combos = [
+    { name: 'ständig (1,35·G)', q: 1.35 * input.qPermanent, kmod: kmodPerm },
+    { name: `ständig + veränderlich (1,35·G + 1,5·Q)`, q: 1.35 * input.qPermanent + 1.5 * input.qVariable, kmod: kmodVar },
+  ];
+  const governing = combos.reduce((a, b) => (b.q / b.kmod > a.q / a.kmod ? b : a));
+
+  const q_d = governing.q;                                            // kN/m
+  const kmod = governing.kmod;
   const q_char = input.qPermanent + input.qVariable;                  // SLS
   const L = input.span;                                                // m
   const L_mm = L * 1000;
@@ -80,9 +98,6 @@ export function calculateBeam(input: BeamInput): BeamResult {
   const M_Ed = q_d * L * L / 8;                  // kNm
   const V_Ed = q_d * L / 2;                      // kN
   const M_char = q_char * L * L / 8;
-
-  // k_mod für ungünstigste Last
-  const kmod = K_MOD[input.serviceClass][input.variableDuration];
 
   // --- 1. Biegespannung ---
   // k_h = Höhenbeiwert für Vollholz: bei h < 150mm → leichte Steigerung. Für BSH ähnlich.
@@ -138,6 +153,33 @@ export function calculateBeam(input: BeamInput): BeamResult {
   else if (lambda_rel_m > 1.4) k_crit = 1 / (lambda_rel_m * lambda_rel_m);
   const eta_kipp = sigma_m / (k_crit * f_md);
 
+  // --- 7. Druck + Biegung (nur wenn Normalkraft vorhanden) ---
+  // Sparren im Sparren-/Kehlbalkendach sind Druckstäbe: der Traufschub wirkt
+  // als Längskraft in der Sparrenachse. EC5 6.3.2, Gl. (6.23)/(6.24).
+  const N_Ed = Math.max(0, input.N_Ed ?? 0);
+  let eta_nm = 0;
+  let sigma_c0 = 0;
+  let kc_min = 1;
+  if (N_Ed > 0) {
+    const f_c0d = designStrength(mat.fc0k, kmod, gammaM);
+    sigma_c0 = (N_Ed * 1000) / sec.A;                                  // N/mm²
+    const betaC = mat.category === 'solid' ? 0.2 : 0.1;
+    // Knicklänge: aus der Dachebene = volle Stützweite (Höhe h maßgebend),
+    // in der Dachebene durch Lattung/Schalung gehalten (Breite b maßgebend).
+    const lef_y = L_mm;
+    const lef_z = (input.lateralSupport ?? L) * 1000;
+    const kcFor = (lef: number, dim: number) => {
+      const i = dim / Math.sqrt(12);
+      const lambda = lef / i;
+      const lambdaRel = (lambda / Math.PI) * Math.sqrt(mat.fc0k / mat.E005);
+      if (lambdaRel <= 0.3) return 1;
+      const k = 0.5 * (1 + betaC * (lambdaRel - 0.3) + lambdaRel * lambdaRel);
+      return Math.min(1, 1 / (k + Math.sqrt(Math.max(0, k * k - lambdaRel * lambdaRel))));
+    };
+    kc_min = Math.min(kcFor(lef_y, input.h), kcFor(lef_z, input.b));
+    eta_nm = sigma_c0 / (kc_min * f_c0d) + sigma_m / f_md;
+  }
+
   const statusOf = (eta: number): CheckResult['status'] => eta > 1 ? 'red' : eta > 0.85 ? 'yellow' : 'green';
 
   const checks: CheckResult[] = [
@@ -145,8 +187,8 @@ export function calculateBeam(input: BeamInput): BeamResult {
       name: 'Biegung', description: 'Spannung in Trägermitte ≤ Bemessungsfestigkeit',
       formula: 'σ_m,d = M_Ed / W_y ≤ f_m,d',
       value: sigma_m, limit: f_md, utilization: eta_m, status: statusOf(eta_m),
-      explanation: `Das Bauteil wird auf Biegung beansprucht. In der Mitte entsteht die größte Spannung. Wir vergleichen mit der zulässigen Biegefestigkeit. M_Ed = ${M_Ed.toFixed(2)} kNm, W_y = ${(sec.Wy / 1000).toFixed(0)} cm³ → σ = ${sigma_m.toFixed(2)} N/mm² (zulässig ${f_md.toFixed(2)} N/mm²).`,
-      values: { 'M_Ed [kNm]': M_Ed.toFixed(2), 'W_y [cm³]': (sec.Wy / 1000).toFixed(0), 'σ_m [N/mm²]': sigma_m.toFixed(2), 'f_m,d [N/mm²]': f_md.toFixed(2), 'k_h': k_h.toFixed(3), 'k_mod': kmod },
+      explanation: `Das Bauteil wird auf Biegung beansprucht. In der Mitte entsteht die größte Spannung. Wir vergleichen mit der zulässigen Biegefestigkeit. Maßgebende Lastkombination: ${governing.name} → q_d = ${q_d.toFixed(2)} kN/m mit k_mod = ${kmod}. M_Ed = ${M_Ed.toFixed(2)} kNm, W_y = ${(sec.Wy / 1000).toFixed(0)} cm³ → σ = ${sigma_m.toFixed(2)} N/mm² (zulässig ${f_md.toFixed(2)} N/mm²).`,
+      values: { 'Kombination': governing.name, 'q_d [kN/m]': q_d.toFixed(2), 'M_Ed [kNm]': M_Ed.toFixed(2), 'W_y [cm³]': (sec.Wy / 1000).toFixed(0), 'σ_m [N/mm²]': sigma_m.toFixed(2), 'f_m,d [N/mm²]': f_md.toFixed(2), 'k_h': k_h.toFixed(3), 'k_mod': kmod },
     },
     {
       name: 'Schub', description: 'Schubspannung am Auflager ≤ zulässig',
@@ -184,6 +226,17 @@ export function calculateBeam(input: BeamInput): BeamResult {
       values: { 'λ_rel,m': lambda_rel_m.toFixed(2), 'k_crit': k_crit.toFixed(2), 'h/b': (input.h / input.b).toFixed(2) },
     },
   ];
+
+  if (N_Ed > 0) {
+    checks.push({
+      name: 'Druck + Biegung',
+      description: 'Kombination Längskraft und Biegung mit Knicken',
+      formula: 'σ_c,0,d/(k_c·f_c,0,d) + σ_m,d/f_m,d ≤ 1',
+      value: eta_nm, limit: 1, utilization: eta_nm, status: statusOf(eta_nm),
+      explanation: `Der Sparren wird nicht nur gebogen, sondern auch längs gedrückt: der Traufschub aus dem Dachdreieck läuft als Längskraft N = ${N_Ed.toFixed(1)} kN durch die Sparrenachse. Druck und Biegung müssen gemeinsam nachgewiesen werden (EC5 6.3.2), inkl. Knickbeiwert k_c = ${kc_min.toFixed(2)}. σ_c,0,d = ${sigma_c0.toFixed(2)} N/mm².`,
+      values: { 'N_Ed [kN]': N_Ed.toFixed(1), 'σ_c,0,d [N/mm²]': sigma_c0.toFixed(2), 'k_c': kc_min.toFixed(2), 'η': eta_nm.toFixed(2) },
+    });
+  }
 
   const maxEta = Math.max(...checks.map(c => c.utilization));
   const overallStatus: CheckResult['status'] = maxEta > 1 ? 'red' : maxEta > 0.85 ? 'yellow' : 'green';

@@ -10,7 +10,17 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { InfoTooltip } from '@/components/help/InfoTooltip';
 import { Hammer } from 'lucide-react';
 
-export interface AbbundGeom { buildingWidth: number; overhang: number; hasMittelpfette?: boolean }
+export interface AbbundGeom {
+  buildingWidth: number;
+  overhang: number;
+  hasMittelpfette?: boolean;
+  /** Statischer Stützenabstand aus dem Tragwerk-Tab [m] — Feldweite der Pfetten */
+  supportSpacing?: number;
+  /** Steher unter EINER tragenden Pfette — aus der echten Bauteilliste abgeleitet */
+  stuetzenProPfette?: number;
+  /** Kopfbänder (type 'rahm') sind im gewählten Tragsystem wirklich vorhanden */
+  hasKopfband?: boolean;
+}
 export interface AbbundDetailsProps {
   member: TimberMember;
   roofPitchDeg: number;
@@ -19,6 +29,16 @@ export interface AbbundDetailsProps {
 
 const SVG_W = 800;
 const SVG_H = 400;
+
+// Bauteil-Erkennung über den Namen aus autoMembers (gleiche Regeln wie in
+// autoCalculate.isMauerbank — die Zeichnung muss dasselbe Bauteil meinen wie die Statik).
+const RE_MAUERBANK = /mauerbank|fußpfette|fusspfette/i;
+const RE_LAENGSPFETTE = /l(ä|ae|a)ngspfette/i;
+const RE_TRAGPFETTE = /first|mittelpfette|\bMP\d|\bFP\d/i;
+/** Stoß-Segmente („… (Stoß 1/2)") auf ihr Ausgangsbauteil zurückführen. */
+function baseName(name: string): string {
+  return name.replace(/\s*\(Stoß\s*\d+\s*\/\s*\d+\)\s*$/i, '').trim();
+}
 
 function fmt(n: number, unit: 'mm' | 'm' = 'mm'): string {
   if (unit === 'mm') return `${Math.round(n)} mm`;
@@ -105,12 +125,14 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
   const mitteSlopeMM = ((geom?.buildingWidth ?? 8) / 4) * 1000 / cosAReal;
   const xMitte = Math.min(
     startX + (ueberstand + mitteSlopeMM) * scale,
-    startX + drawLen - slant - sohleLen - 30,
+    startX + drawLen - slant - slantT - sohleLen - 10,
   );
-  // Kerve im Anriss (Traversal der Unterkante von rechts nach links):
-  // Stoß-Fuß → lotrechter Stoß hoch (oben bergwärts) → Sohle läuft talwärts in die Unterkante aus
+  // Kerve im Anriss (Traversal der Unterkante von rechts nach links, x fällt monoton):
+  // Sohlen-Auslauf (bergwärts) → waagrechte Sohle auf Pfetten-OK → lotrechter
+  // Stoß runter auf die Unterkante; der Lotstoß steht TALSEITIG an der
+  // Pfettenflanke und nimmt den Hangabtrieb auf (wie Roof3D sparrenProfil).
   const kerbe = (xStoss: number) =>
-    `${xStoss},${yB} ${xStoss + slantT},${yB - tPix} ${xStoss + slantT - sohleLen},${yB}`;
+    `${xStoss + slantT + sohleLen},${yB} ${xStoss + slantT},${yB - tPix} ${xStoss},${yB}`;
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
@@ -168,7 +190,14 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
 }
 
 // ─── PFETTE-Detail ────────────────────────────────────────────────────────────
-function PfetteDetail({ member }: { member: TimberMember; roofPitchDeg: number }) {
+// Es wird NUR gezeichnet, was das gewählte Tragsystem wirklich hat:
+// • Mauerbank (Fußpfette): liegt durchgehend auf der Mauerkrone → KEINE Stützen,
+//   sondern Sturmanker-Verankerung in die Mauer (Stoß als Blattstoß auf der Krone).
+// • Längspfette (Hallen-Modus): spannt von BSH-Hauptträger zu BSH-Hauptträger →
+//   genau 2 Endauflager, kein 4-m-Raster.
+// • First-/Mittelpfette: Giebel-/Innenwand als Endauflager + die Steher, die in
+//   der Bauteilliste tatsächlich erzeugt (und nachgewiesen) wurden.
+function PfetteDetail({ member, geom }: { member: TimberMember; roofPitchDeg: number; geom?: AbbundGeom }) {
   const b = member.width;
   const h = member.height;
   const lengthMM = (member.length || 8) * 1000;
@@ -177,18 +206,63 @@ function PfetteDetail({ member }: { member: TimberMember; roofPitchDeg: number }
   const drawH = h * scale * 3;
   const startX = 75;
   const startY = 180;
+  const yBot = startY + drawH;
 
-  // Annahme: Stützenabstand ~4m
-  const stuetzAbst = 4000;
-  const nStuetz = Math.max(2, Math.ceil(lengthMM / stuetzAbst) + 1);
-  const realSpacing = lengthMM / (nStuetz - 1);
+  const istMauerbank = RE_MAUERBANK.test(member.name);
+  const istLaengspfette = RE_LAENGSPFETTE.test(member.name);
+  // Stoß-Segmente teilen sich die Steher der Ausgangspfette.
+  const nSegmente = Number(member.name.match(/\(Stoß\s*\d+\s*\/\s*(\d+)\)/i)?.[1] ?? 1);
+  const istSegment = nSegmente > 1;
+
+  // Auflager aus der ECHTEN Bauteilliste: 2 Endauflager + die generierten Steher.
+  // Nur wenn keine Steher-Information vorliegt, wird auf den statischen
+  // Stützenabstand zurückgegriffen (derselbe Wert wie in resolveSpan).
+  const spacingMM = (geom?.supportSpacing ?? 4) * 1000;
+  const nSteher = istLaengspfette
+    ? 0
+    : geom?.stuetzenProPfette != null
+      ? Math.max(0, Math.round(geom.stuetzenProPfette / nSegmente))
+      : Math.max(0, Math.ceil(lengthMM / spacingMM) - 1);
+  const nAuflager = nSteher + 2;
+  const feldweite = lengthMM / (nAuflager - 1);
+
+  // Mauerbank: Sturmanker ca. alle 1,5 m (= Verankerungsabstand, mit dem die
+  // Mauerbank in resolveSpan auch gerechnet wird) bzw. an jedem 2. Sparren.
+  const ankerAbst = 1500;
+  const nAnker = Math.max(2, Math.round(lengthMM / ankerAbst) + 1);
+  const ankerSpacing = lengthMM / (nAnker - 1);
+
+  const endauflagerText = istLaengspfette
+    ? 'Endauflager: BSH-Hauptträger'
+    : istSegment
+      ? 'Auflager / Stoßstelle'
+      : 'Endauflager: Giebel-/tragende Innenwand';
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
       <WoodPattern id="wood-pf" />
+      <defs>
+        <pattern id="mauer-pf" patternUnits="userSpaceOnUse" width="14" height="8">
+          <rect width="14" height="8" fill="#e7e5e4" />
+          <line x1="0" y1="0" x2="14" y2="0" stroke="#a8a29e" strokeWidth="0.8" />
+          <line x1="0" y1="4" x2="0" y2="8" stroke="#a8a29e" strokeWidth="0.8" />
+          <line x1="7" y1="0" x2="7" y2="4" stroke="#a8a29e" strokeWidth="0.8" />
+          <line x1="0" y1="4" x2="14" y2="4" stroke="#a8a29e" strokeWidth="0.8" />
+        </pattern>
+      </defs>
       <text x={SVG_W / 2} y={28} textAnchor="middle" fontSize={16} fontWeight="bold" fill="#1e293b">
         {member.name} ({b}/{h} mm, L = {(lengthMM / 1000).toFixed(2)} m)
       </text>
+
+      {/* Mauerkrone: die Mauerbank liegt VOLLFLÄCHIG auf, keine freie Stützweite */}
+      {istMauerbank && (
+        <>
+          <rect x={startX - 12} y={yBot} width={drawLen + 24} height={26} fill="url(#mauer-pf)" stroke="#78716c" strokeWidth={1} />
+          <text x={startX + drawLen / 2} y={yBot + 46} fontSize={11} fill="#78716c" textAnchor="middle">
+            Mauerkrone – Mauerbank liegt durchgehend auf (kein freies Feld, keine Stützen)
+          </text>
+        </>
+      )}
 
       {/* Liegender Balken */}
       <rect x={startX} y={startY} width={drawLen} height={drawH} fill="url(#wood-pf)" stroke="#333" strokeWidth={1.5} />
@@ -200,27 +274,61 @@ function PfetteDetail({ member }: { member: TimberMember; roofPitchDeg: number }
           x2={startX + (i + 1) * 800 * scale} y2={startY}
           stroke="#888" strokeWidth={1} />
       ))}
-      <text x={startX + drawLen / 2} y={startY - 30} fontSize={10} fill="#888" textAnchor="middle">Sparren (oben aufgelagert)</text>
+      <text x={startX + drawLen / 2} y={startY - 30} fontSize={10} fill="#888" textAnchor="middle">
+        {istMauerbank ? 'Sparren (mit Kerve aufgelagert)' : 'Sparren (oben aufgelagert)'}
+      </text>
 
-      {/* Stützen unten als Dreiecke */}
-      {Array.from({ length: nStuetz }).map((_, i) => {
-        const x = startX + i * realSpacing * scale;
+      {/* Mauerbank: Sturmanker statt Stützen */}
+      {istMauerbank && Array.from({ length: nAnker }).map((_, i) => {
+        const x = startX + i * ankerSpacing * scale;
         return (
           <g key={i}>
-            <polygon points={`${x - 8},${startY + drawH + 25} ${x + 8},${startY + drawH + 25} ${x},${startY + drawH + 5}`}
-                     fill="#666" />
-            <text x={x} y={startY + drawH + 38} fontSize={10} fill="#666" textAnchor="middle">S{i + 1}</text>
+            <line x1={x} y1={startY - 2} x2={x} y2={yBot + 22} stroke="#b91c1c" strokeWidth={1.6} />
+            <path d={`M ${x} ${yBot + 22} L ${x + 5} ${yBot + 22}`} stroke="#b91c1c" strokeWidth={1.6} fill="none" />
           </g>
         );
       })}
+      {istMauerbank && (
+        <>
+          <text x={startX + drawLen / 2} y={yBot + 64} fontSize={11} fill="#b91c1c" textAnchor="middle">
+            Sturmanker / Mauerbankanker – {nAnker} Stück, Abstand ≈ {fmt(ankerSpacing)} (jeder 2. Sparren)
+          </text>
+          <Dim x1={startX} y1={yBot + 84} x2={startX + ankerSpacing * scale} y2={yBot + 84}
+               label={`Ankerabstand ${fmt(ankerSpacing)}`} side="bottom" />
+        </>
+      )}
 
-      {/* Bemaßung: Stützenabstände */}
-      {Array.from({ length: nStuetz - 1 }).map((_, i) => {
-        const x1 = startX + i * realSpacing * scale;
-        const x2 = startX + (i + 1) * realSpacing * scale;
+      {/* Tragende Pfette: Endauflager (Wand/Hauptträger) + wirklich vorhandene Steher */}
+      {!istMauerbank && Array.from({ length: nAuflager }).map((_, i) => {
+        const x = startX + i * feldweite * scale;
+        const istEnde = i === 0 || i === nAuflager - 1;
         return (
-          <Dim key={i} x1={x1} y1={startY + drawH + 70} x2={x2} y2={startY + drawH + 70}
-               label={fmt(realSpacing)} side="bottom" />
+          <g key={i}>
+            {istEnde ? (
+              <rect x={x - 9} y={yBot} width={18} height={26} fill="url(#mauer-pf)" stroke="#78716c" strokeWidth={1} />
+            ) : (
+              <rect x={x - 5} y={yBot} width={10} height={34} fill="url(#wood-pf)" stroke="#333" strokeWidth={1} />
+            )}
+            <text x={x} y={yBot + 46} fontSize={10} fill="#666" textAnchor="middle">
+              {istEnde ? 'A' : `ST${i}`}
+            </text>
+          </g>
+        );
+      })}
+      {!istMauerbank && (
+        <text x={startX + drawLen / 2} y={yBot + 62} fontSize={10} fill="#666" textAnchor="middle">
+          {endauflagerText}
+          {nSteher > 0 ? ` · ${nSteher} Steher lt. Bauteilliste` : ' · keine Steher in der Bauteilliste'}
+        </text>
+      )}
+
+      {/* Bemaßung: Feldweiten — nur wenn es überhaupt mehrere Felder gibt */}
+      {!istMauerbank && nAuflager > 2 && Array.from({ length: nAuflager - 1 }).map((_, i) => {
+        const x1 = startX + i * feldweite * scale;
+        const x2 = startX + (i + 1) * feldweite * scale;
+        return (
+          <Dim key={i} x1={x1} y1={yBot + 84} x2={x2} y2={yBot + 84}
+               label={fmt(feldweite)} side="bottom" />
         );
       })}
 
@@ -229,14 +337,18 @@ function PfetteDetail({ member }: { member: TimberMember; roofPitchDeg: number }
            label={`Gesamt: ${fmt(lengthMM)}`} side="top" />
 
       {/* Bemaßung: Höhe */}
-      <Dim x1={startX + drawLen + 25} y1={startY} x2={startX + drawLen + 25} y2={startY + drawH}
+      <Dim x1={startX + drawLen + 25} y1={startY} x2={startX + drawLen + 25} y2={yBot}
            label={`h = ${h} mm`} side="right" />
 
       {/* Hinweis Stoßstelle wenn länger als 6m */}
       {lengthMM > 6000 && (
-        <text x={startX + drawLen / 2} y={startY + drawH / 2} fontSize={11} fill="#dc2626"
+        <text x={startX + drawLen / 2} y={startY + drawH / 2 + 4} fontSize={11} fill="#dc2626"
               textAnchor="middle" fontWeight="bold">
-          ⚠ Stoß: Pfette über {lengthMM / 1000 > 6 ? '6 m' : ''} – Stoßstelle über Stütze vorsehen
+          {istMauerbank
+            ? '⚠ Stoß: als Blattstoß / schräger Stoß auf der Mauerkrone ausführen'
+            : istLaengspfette
+              ? '⚠ Stoß: Stoßstelle über BSH-Hauptträger vorsehen'
+              : '⚠ Stoß: Pfette über 6 m – Stoßstelle über Auflager/Steher vorsehen'}
         </text>
       )}
 
@@ -252,7 +364,9 @@ function PfetteDetail({ member }: { member: TimberMember; roofPitchDeg: number }
 }
 
 // ─── STÜTZE-Detail ────────────────────────────────────────────────────────────
-function StuetzeDetail({ member }: { member: TimberMember; roofPitchDeg: number }) {
+// Kopfbänder und Zapfen werden NUR dargestellt, wenn sie im gewählten Tragsystem
+// auch wirklich als Bauteil/Verbindung erzeugt, nachgewiesen und kalkuliert sind.
+function StuetzeDetail({ member, geom }: { member: TimberMember; roofPitchDeg: number; geom?: AbbundGeom }) {
   const b = member.width;
   const h = member.height;
   const stHmm = (member.length || 3) * 1000;
@@ -261,7 +375,7 @@ function StuetzeDetail({ member }: { member: TimberMember; roofPitchDeg: number 
   const drawB = b * scale * 3;
   const cx = 250;
   const cy = 80;
-  const zapfen = 50; // 50mm Zapfen oben
+  const hatKopfband = geom?.hasKopfband ?? false;
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
@@ -270,15 +384,19 @@ function StuetzeDetail({ member }: { member: TimberMember; roofPitchDeg: number 
         Stütze – {member.name} ({b}/{h} mm, H = {(stHmm / 1000).toFixed(2)} m)
       </text>
 
-      {/* Vertikaler Balken */}
-      <rect x={cx} y={cy + zapfen * scale * 3} width={drawB} height={drawH - zapfen * scale * 3}
+      {/* Vertikaler Balken (durchgehend — kein Zapfen, siehe Kopfanschluss) */}
+      <rect x={cx} y={cy} width={drawB} height={drawH}
             fill="url(#wood-st)" stroke="#333" strokeWidth={1.5} />
 
-      {/* Zapfen oben */}
-      <rect x={cx + drawB * 0.25} y={cy} width={drawB * 0.5} height={zapfen * scale * 3}
-            fill="url(#wood-st)" stroke="#333" strokeWidth={1.5} />
-      <text x={cx + drawB / 2} y={cy - 8} fontSize={11} fill="#dc2626" textAnchor="middle">
-        Zapfen für Pfette: {Math.round(b * 0.5)}×{zapfen} mm
+      {/* Stützenkopf: Pfette liegt auf, Anschluss mit Stahl-Winkelverbinder.
+          Ein Zapfenstoß wird nur gezeichnet, wenn er auch nachgewiesen ist —
+          computeJoints erzeugt derzeit ausschließlich Längsstöße. */}
+      <path d={`M ${cx} ${cy + 18} L ${cx} ${cy} L ${cx - 14} ${cy}`}
+            stroke="#6b7280" strokeWidth={3} fill="none" />
+      <path d={`M ${cx + drawB} ${cy + 18} L ${cx + drawB} ${cy} L ${cx + drawB + 14} ${cy}`}
+            stroke="#6b7280" strokeWidth={3} fill="none" />
+      <text x={cx + drawB / 2} y={cy - 10} fontSize={11} fill="#dc2626" textAnchor="middle">
+        Stützenkopf: Pfette aufgelegt – Winkelverbinder / Stabdübel
       </text>
 
       {/* Fußplatte unten */}
@@ -287,13 +405,21 @@ function StuetzeDetail({ member }: { member: TimberMember; roofPitchDeg: number 
         Fußplatte / Schwelle + Anker
       </text>
 
-      {/* Kopfband angedeutet (45° schräg) */}
-      <line x1={cx + drawB} y1={cy + drawH * 0.3} x2={cx + drawB + 80} y2={cy + drawH * 0.3 - 80}
-            stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" />
-      <text x={cx + drawB + 90} y={cy + drawH * 0.3 - 80} fontSize={11} fill="#16a34a">Kopfband 45°</text>
-      <line x1={cx} y1={cy + drawH * 0.3} x2={cx - 80} y2={cy + drawH * 0.3 - 80}
-            stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" />
-      <text x={cx - 90} y={cy + drawH * 0.3 - 80} fontSize={11} fill="#16a34a" textAnchor="end">Kopfband 45°</text>
+      {/* Kopfband: nur wenn die Bauteilliste Kopfbänder (type 'rahm') enthält */}
+      {hatKopfband ? (
+        <>
+          <line x1={cx + drawB} y1={cy + drawH * 0.3} x2={cx + drawB + 80} y2={cy + drawH * 0.3 - 80}
+                stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" />
+          <text x={cx + drawB + 90} y={cy + drawH * 0.3 - 80} fontSize={11} fill="#16a34a">Kopfband 45°</text>
+          <line x1={cx} y1={cy + drawH * 0.3} x2={cx - 80} y2={cy + drawH * 0.3 - 80}
+                stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" />
+          <text x={cx - 90} y={cy + drawH * 0.3 - 80} fontSize={11} fill="#16a34a" textAnchor="end">Kopfband 45°</text>
+        </>
+      ) : (
+        <text x={SVG_W / 2} y={SVG_H - 12} fontSize={10} fill="#b45309" textAnchor="middle">
+          Kein Kopfband in der Bauteilliste – Längsaussteifung des Stuhls gesondert nachweisen und einpreisen.
+        </text>
+      )}
 
       {/* Bemaßung: Höhe */}
       <Dim x1={cx - 50} y1={cy} x2={cx - 50} y2={cy + drawH}
@@ -472,18 +598,55 @@ export function AbbundOverview({ members, roofPitchDeg, geom }: AbbundOverviewPr
     );
   }
 
-  // Pro Typ ein Repräsentant (das erste Element)
-  const types = ['sparren', 'pfette', 'stuetze', 'kehlbalken', 'leimbinder', 'rahm'] as const;
-  const grouped = types
-    .map(t => ({ type: t, member: members.find(m => m.type === t) }))
-    .filter(g => g.member);
+  // Repräsentanten aus der ECHTEN Bauteilliste wählen — nicht blind das erste
+  // Element je Typ: Mauerbank und tragende Pfette sind verschiedene Bauteile mit
+  // verschiedenen Auflagern und brauchen daher je einen eigenen Detailplan.
+  const pfetten = members.filter(m => m.type === 'pfette');
+  const mauerbank = pfetten.find(m => RE_MAUERBANK.test(m.name));
+  const tragpfette =
+    pfetten.find(m => RE_TRAGPFETTE.test(m.name)) ??
+    pfetten.find(m => RE_LAENGSPFETTE.test(m.name)) ??
+    pfetten.find(m => !RE_MAUERBANK.test(m.name));
+
+  // Stoß-Segmente zählen nur einmal (sie tragen die Menge des Ausgangsbauteils).
+  const uniqueByBase = (list: TimberMember[]): TimberMember[] => {
+    const seen = new Set<string>();
+    return list.filter(m => {
+      const key = baseName(m.name);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const stuetzenQty = uniqueByBase(members.filter(m => m.type === 'stuetze'))
+    .reduce((sum, m) => sum + (m.quantity || 0), 0);
+  const nTragpfetten = uniqueByBase(pfetten.filter(m => !RE_MAUERBANK.test(m.name))).length;
+
+  // Geometrie/Bauteil-Fakten für die Detailzeichnungen: übergebene Werte haben
+  // Vorrang, alles andere wird aus der Bauteilliste abgeleitet.
+  const geomEff: AbbundGeom = {
+    buildingWidth: geom?.buildingWidth ?? 8,
+    overhang: geom?.overhang ?? 0.4,
+    hasMittelpfette: geom?.hasMittelpfette ?? pfetten.some(m => /mittel/i.test(m.name)),
+    supportSpacing: geom?.supportSpacing,
+    stuetzenProPfette: geom?.stuetzenProPfette
+      ?? (nTragpfetten > 0 ? Math.round(stuetzenQty / nTragpfetten) : 0),
+    hasKopfband: geom?.hasKopfband ?? members.some(m => m.type === 'rahm'),
+  };
+
+  const grouped: { key: string; label: string; member: TimberMember }[] = [];
+  const add = (key: string, label: string, m?: TimberMember) => {
+    if (m) grouped.push({ key, label, member: m });
+  };
+  add('sparren', 'Sparren', members.find(m => m.type === 'sparren'));
+  add('pfette', 'Pfette', tragpfette);
+  add('mauerbank', 'Mauerbank', mauerbank);
+  add('stuetze', 'Stütze', members.find(m => m.type === 'stuetze'));
+  add('kehlbalken', 'Kehlbalken', members.find(m => m.type === 'kehlbalken'));
+  add('leimbinder', 'BSH-Träger', members.find(m => m.type === 'leimbinder'));
+  add('rahm', 'Kopfband', members.find(m => m.type === 'rahm'));
 
   if (grouped.length === 0) return null;
-
-  const labels: Record<string, string> = {
-    sparren: 'Sparren', pfette: 'Pfette', stuetze: 'Stütze',
-    kehlbalken: 'Kehlbalken', leimbinder: 'BSH-Träger', rahm: 'Kopfband',
-  };
 
   return (
     <Card>
@@ -497,15 +660,15 @@ export function AbbundOverview({ members, roofPitchDeg, geom }: AbbundOverviewPr
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue={grouped[0].type}>
+        <Tabs defaultValue={grouped[0].key}>
           <TabsList>
             {grouped.map(g => (
-              <TabsTrigger key={g.type} value={g.type}>{labels[g.type]}</TabsTrigger>
+              <TabsTrigger key={g.key} value={g.key}>{g.label}</TabsTrigger>
             ))}
           </TabsList>
           {grouped.map(g => (
-            <TabsContent key={g.type} value={g.type} className="mt-3">
-              <AbbundDetails member={g.member!} roofPitchDeg={roofPitchDeg} geom={geom} />
+            <TabsContent key={g.key} value={g.key} className="mt-3">
+              <AbbundDetails member={g.member} roofPitchDeg={roofPitchDeg} geom={geomEff} />
               <div className="mt-2 text-xs text-muted-foreground">
                 Vereinfachte Detailansicht für Klassische Holzverbindungen. Konkrete Maße/Verbinder vom Statiker prüfen lassen.
               </div>

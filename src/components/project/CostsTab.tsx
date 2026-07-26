@@ -187,7 +187,7 @@ export function CostsTab({ project, onUpdate }: CostsTabProps) {
               <div className="grid grid-cols-3 gap-3 text-sm">
                 {([
                   { key: 'wasteTimber', label: 'Verschnitt Holz (%)', tip: 'Typisch 8-15 %' },
-                  { key: 'laborMarkup', label: 'Lohnaufschlag (%)', tip: 'Material zu Lohn-Verhältnis' },
+                  { key: 'laborMarkup', label: 'Lohnzuschlag (%)', tip: 'Erschwernis, Zulagen, Höhenarbeit — Zuschlag auf alle Lohnpositionen' },
                   { key: 'overhead', label: 'Gemeinkosten (%)', tip: 'Büro, Versicherung, Werkzeug' },
                   { key: 'profit', label: 'Gewinn (%)', tip: 'Unternehmergewinn' },
                   { key: 'vat', label: 'MwSt (%)', tip: 'Österreich: 20%' },

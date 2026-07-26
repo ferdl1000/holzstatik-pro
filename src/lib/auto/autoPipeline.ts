@@ -286,10 +286,36 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     .filter((lc) => lc.type === 'permanent')
     .reduce((sum, lc) => sum + lc.value, 0);
 
-  // s_k: Summe aller Schnee-Lastfälle
-  const s_k = loadsResult.loadCases
+  // s_k: MAXIMUM aller Schnee-Lastfälle — NICHT die Summe!
+  // Der symmetrische und der einseitige (verwehte) Schneelastfall sind nach
+  // EC1-1-3 Abschn. 5.3.3 ALTERNATIVE Lastanordnungen. Sie treten nie
+  // gleichzeitig auf; maßgebend ist der ungünstigere von beiden. Vorher wurden
+  // sie addiert → jedes Satteldach zwischen 15° und 60° wurde mit der
+  // DOPPELTEN Schneelast bemessen (Querschnitte 1–3 Stufen zu groß, Angebot
+  // deutlich zu teuer).
+  const s_k_schnee = loadsResult.loadCases
     .filter((lc) => lc.type === 'snow')
-    .reduce((sum, lc) => sum + lc.value, 0);
+    .reduce((max, lc) => Math.max(max, lc.value), 0);
+
+  // Nutzlast Wartung (Kategorie H, ÖNORM B 1991-1-1) ist eine ALTERNATIVE zur
+  // Schneelast, nicht ein Zuschlag — maßgebend ist die größere der beiden.
+  // Sie wurde bisher berechnet und angezeigt, aber nie nachgewiesen.
+  const q_wartung = loadsResult.loadCases
+    .filter((lc) => lc.type === 'maintenance')
+    .reduce((max, lc) => Math.max(max, lc.value), 0);
+  const s_k = Math.max(s_k_schnee, q_wartung);
+
+  // Windsog (negativer Lastfall) für den Abhebenachweis
+  const w_sog = loadsResult.loadCases
+    .filter((lc) => lc.type === 'wind' && lc.value < 0)
+    .reduce((min, lc) => Math.min(min, lc.value), 0);
+
+  const bemessungsLasten = {
+    gk: g_k,
+    sk: s_k,
+    altitude: loadsResult.altitude,
+    wk_suction: w_sog,
+  };
 
   // ── 4b. VARIANTEN-VERGLEICH: "Viele Wege führen nach Rom — nimm den
   // günstigsten." Wenn das Tragsystem nicht vom Nutzer bestätigt ist, wird
@@ -308,7 +334,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
       const sys: StructuralSystem = { ...structuralSystemRaw, type: sysType };
       const mem = autoGenerateMembers(derivedGeometry.geometry, roofTypeRaw, sys,
         { sparrenSpacing, ceilings, planSections, roofOverhang });
-      const calc = await autoCalculateAllMembers(mem.members, { gk: g_k, sk: s_k },
+      const calc = await autoCalculateAllMembers(mem.members, bemessungsLasten,
         derivedGeometry.geometry, sparrenSpacing, sys.supportSpacing ?? 4.0);
       const cost = await autoComputeCosts(calc.optimizedMembers, derivedGeometry.geometry, {
         joints: mem.joints, roofForm: roofTypeRaw.form, includeDeckPlanks: true,
@@ -339,7 +365,7 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   // ── 5. Berechnung & Optimierung ──────────────────────────────────────────
   const calculationsResult = await autoCalculateAllMembers(
     membersResult.members,
-    { gk: g_k, sk: s_k },
+    bemessungsLasten,
     derivedGeometry.geometry,
     sparrenSpacing,
     structuralSystemRaw.supportSpacing ?? 4.0,

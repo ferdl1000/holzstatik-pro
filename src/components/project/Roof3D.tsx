@@ -54,6 +54,14 @@ function utilizationColor(eta: number | undefined): string {
   return '#16a34a';
 }
 
+/**
+ * Kehlbalkenlage = Traufhöhe + Faktor × Sprunghöhe.
+ * MUSS mit der Annahme in der Statik (autoMembers: `kehlbalkenHoehe`) identisch
+ * sein — sonst zeigt die Zeichnung eine andere Lage/Länge als gerechnet wurde.
+ * Die Kehlbalkenlänge folgt daraus zu B × (1 − Faktor).
+ */
+export const KEHLBALKEN_HOEHENFAKTOR = 2 / 3;
+
 const COLORS = {
   wall: '#e8dcc4',
   floor: '#d0d4cf',
@@ -205,6 +213,14 @@ function buildPartBoxes(
   const leimbinderList = members.filter(m => m.type === 'leimbinder');
   const kopfbandList = members.filter(m => m.type === 'rahm');
 
+  // Hallenbinder-Raster: die beiden äußeren Binder liegen auf den Giebelachsen,
+  // dazwischen im gerechneten Achsabstand L/(n−1) — genau so ist die Stückzahl in
+  // autoMembers hergeleitet (traegerCount = ceil(L / Achsabstand) + 1). Nur mit
+  // diesem Raster stimmen die Felder, in denen die Längspfetten liegen.
+  const binderCount = leimbinderList.reduce((s, lb) => s + Math.max(1, lb.quantity), 0);
+  const binderSpacing = binderCount > 1 ? length / (binderCount - 1) : length;
+  const binderX = (i: number) => (binderCount > 1 ? -length / 2 + i * binderSpacing : 0);
+
   // === Sparren - dachformabhängig ===
   for (const sm of sparrenList) {
     const qty = Math.max(1, sm.quantity);
@@ -314,8 +330,15 @@ function buildPartBoxes(
   const underRafter = (sparH / 2) / cosA;
   const midY = (eavesHeight + ridgeHeight) / 2;
 
+  // Auflagerreihen für die Steher: eine Reihe je WIRKLICH vorhandener Pfettenreihe
+  // (First + Mittelpfetten). topY = Unterkante der Pfette, z = deren Querlage.
+  const pfettenReihen: Array<{ topY: number; z: number }> = [];
+  const addReihe = (topY: number, z: number) => {
+    if (pfettenReihen.some(r => Math.abs(r.z - z) < 0.01)) return; // Reihe schon vorhanden
+    pfettenReihen.push({ topY, z });
+  };
+
   // === Firstpfette — stehend, direkt unter dem First (Sparren lagern auf ihr) ===
-  let firstPfettenY: number | null = null;
   for (const fp of firstPfetten) {
     if (isPultdach || isFlachdach) continue; // keine Firstpfette
     const ridgeLen = isWalm
@@ -323,7 +346,7 @@ function buildPartBoxes(
       : length;
     const fpH = fp.height / 1000;
     const y = ridgeHeight - underRafter - fpH / 2;
-    firstPfettenY = y;
+    addReihe(y - fpH / 2, 0);
     add({ key: `${partId}-fp-${fp.id}`, memberId: fp.id, memberName: fp.name,
           pos: [0, y, 0], rot: [0, 0, 0],
           dims: [ridgeLen, fpH, fp.width / 1000],
@@ -331,7 +354,11 @@ function buildPartBoxes(
   }
 
   // === Mittelpfetten — unter der Sparrenlage auf halber Dachhöhe ===
-  const midPfetten = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
+  // Hallen-Längspfetten (auf den BSH-Bindern) haben ein eigenes Raster und werden
+  // weiter unten stückweise gezeichnet — sie sind KEINE Mittelpfetten.
+  const isHalle = leimbinderList.length > 0;
+  const laengsPfetten = isHalle ? otherPfetten : [];
+  const midPfetten = mittelPfetten.length > 0 ? mittelPfetten : (isHalle ? [] : otherPfetten);
   let midPfettenY: number | null = null;
   midPfetten.forEach((mp, idx) => {
     const mpH = mp.height / 1000;
@@ -341,6 +368,7 @@ function buildPartBoxes(
     const yAxis = isFlachdach ? eavesHeight : (isPultdach ? eavesHeight + rise / 2 : midY);
     const y = yAxis - underRafter - mpH / 2;
     midPfettenY = y;
+    addReihe(y - mpH / 2, z);
     add({ key: `${partId}-mp-${mp.id}`, memberId: mp.id, memberName: mp.name,
           pos: [0, y, z], rot: [0, 0, 0],
           dims: [length, mpH, mp.width / 1000],
@@ -357,22 +385,62 @@ function buildPartBoxes(
           color: utilizationColor(utilizations[fp.id]) });
   });
 
+  // === Hallen-Längspfetten — im gerechneten Raster: je Feld zwischen zwei
+  //     Hauptträgern und je Dachfläche n Stück, nicht EIN durchlaufender Balken ===
+  if (laengsPfetten.length > 0) {
+    const felder = Math.max(1, binderCount - 1); // Felder zwischen den Hauptträgern
+    const seiten = (isPultdach || isFlachdach) ? 1 : 2;
+    // Höhe der Dachhaut über der Querlage z (Pfetten liegen darunter)
+    const dachY = (z: number) => isFlachdach
+      ? eavesHeight
+      : isPultdach
+        ? ridgeHeight - (z + halfWidth) * (rise / width)
+        : ridgeHeight - Math.abs(z) * (rise / halfWidth);
+    for (const lp of laengsPfetten) {
+      const lpH = lp.height / 1000;
+      const lpB = lp.width / 1000;
+      // Segment spannt von Binder zu Binder — höchstens aber die Bauteil-Länge
+      const segLen = Math.min(lp.length || binderSpacing, binderSpacing);
+      const nProSeite = Math.max(1, Math.round(Math.max(1, lp.quantity) / felder / seiten));
+      const color = utilizationColor(utilizations[lp.id]);
+      for (let f = 0; f < felder; f++) {
+        const x = binderX(f) + binderSpacing / 2; // Feldmitte zwischen zwei Bindern
+        for (let k = 0; k < nProSeite; k++) {
+          for (const side of (seiten === 1 ? [0] : [-1, 1])) {
+            const z = seiten === 1
+              ? -halfWidth + (k + 0.5) * (width / nProSeite)
+              : side * ((k + 0.5) * halfWidth) / nProSeite;
+            add({ key: `${partId}-lp-${lp.id}-${f}-${k}-${side}`, memberId: lp.id, memberName: lp.name,
+                  pos: [x, dachY(z) - lpH / 2, z], rot: [0, 0, 0],
+                  dims: [segLen, lpH, lpB], color });
+          }
+        }
+      }
+    }
+  }
+
   // === Stützen (Steher) — direkt UNTER der zugehörigen Pfette, Kopf an deren Unterkante ===
+  // Die Stückzahl aus der Bauteilliste ist über ALLE Pfettenreihen gerechnet
+  // (autoMembers: totalStuetzen = Steher je Reihe × Pfettenreihen). Also auch hier
+  // reihum auf First- und Mittelpfette verteilen — sonst bliebe der First ohne
+  // Auflager. Alle Steher einer Querachse stehen auf derselben Fußpunkt-Ebene.
   for (const st of stuetzenList) {
     const qty = Math.max(1, st.quantity);
     const stH = st.length || (ridgeHeight - 0.5);
-    const spacing = length / (qty + 1);
+    const reihen = pfettenReihen.length > 0
+      ? pfettenReihen
+      : [{ topY: ridgeHeight - underRafter, z: 0 }];
+    const proReihe = Math.max(1, Math.ceil(qty / reihen.length));
+    const spacing = length / (proReihe + 1);
+    const baseY = Math.min(...reihen.map(r => r.topY)) - stH; // gemeinsame Fußpunkt-Ebene
     const color = utilizationColor(utilizations[st.id]);
-    const isFirstSteher = /first/i.test(st.name) || midPfetten.length === 0;
     for (let i = 0; i < qty; i++) {
-      const x = -length / 2 + (i + 1) * spacing;
-      const pfettenY = isFirstSteher ? firstPfettenY : midPfettenY;
-      const pfettenZ = isFirstSteher ? 0 : ((i % 2 === 0 ? -1 : 1) * halfWidth) / 2;
-      const pfH = ((isFirstSteher ? firstPfetten[0] : midPfetten[0])?.height ?? 220) / 1000;
-      const topY = (pfettenY ?? (ridgeHeight - underRafter)) - pfH / 2;
+      const reihe = reihen[i % reihen.length];
+      const x = -length / 2 + (Math.floor(i / reihen.length) + 1) * spacing;
+      const hSteher = Math.max(0.2, reihe.topY - baseY);
       add({ key: `${partId}-st-${st.id}-${i}`, memberId: st.id, memberName: st.name,
-            pos: [x, topY - stH / 2, pfettenZ], rot: [0, 0, 0],
-            dims: [st.width / 1000, stH, st.height / 1000], color });
+            pos: [x, baseY + hSteher / 2, reihe.z], rot: [0, 0, 0],
+            dims: [st.width / 1000, hSteher, st.height / 1000], color });
     }
   }
 
@@ -425,24 +493,27 @@ function buildPartBoxes(
   for (const kb of kehlbalkenList) {
     const qty = Math.max(1, kb.quantity);
     const spacing = length / qty;
-    const y = eavesHeight + rise * 0.6;
+    // Lage und Länge exakt wie in der Statik gerechnet (siehe KEHLBALKEN_HOEHENFAKTOR):
+    // Höhe = Traufe + 2/3 der Sprunghöhe, Länge = Schnittpunkt mit den Sparren = B/3.
+    const y = eavesHeight + rise * KEHLBALKEN_HOEHENFAKTOR;
+    const kbLen = kb.length || width * (1 - KEHLBALKEN_HOEHENFAKTOR);
     const color = utilizationColor(utilizations[kb.id]);
     for (let i = 0; i < qty; i++) {
       const x = -length / 2 + (i + 0.5) * spacing;
       add({ key: `${partId}-kb-${kb.id}-${i}`, memberId: kb.id, memberName: kb.name,
             pos: [x, y, 0], rot: [0, 0, 0],
-            dims: [kb.width / 1000, kb.height / 1000, width * 0.6], color });
+            dims: [kb.width / 1000, kb.height / 1000, kbLen], color });
     }
   }
 
-  // === Leimbinder (BSH-Hauptträger quer zur Längsachse) ===
+  // === Leimbinder (BSH-Hauptträger quer zur Längsachse) — auf dem Binderraster ===
+  let binderIdx = 0;
   for (const lb of leimbinderList) {
     const qty = Math.max(1, lb.quantity);
-    const spacing = length / (qty + 1);
     const y = eavesHeight + rise / 2;
     const color = utilizationColor(utilizations[lb.id]);
     for (let i = 0; i < qty; i++) {
-      const x = -length / 2 + (i + 1) * spacing;
+      const x = binderX(binderIdx++);
       add({ key: `${partId}-lb-${lb.id}-${i}`, memberId: lb.id, memberName: lb.name,
             pos: [x, y, 0], rot: [0, 0, 0],
             dims: [lb.width / 1000, lb.height / 1000, width], color });

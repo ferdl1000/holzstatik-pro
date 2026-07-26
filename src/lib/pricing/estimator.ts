@@ -253,6 +253,22 @@ export function estimateCost(input: EstimatorInput): CostEstimate {
     else subtotals.other += p.total;
   }
 
+  // Lohnzuschlag (Erschwernis, Zulagen, Höhenarbeit) auf alle Lohnpositionen.
+  // Bisher war dieser im Kosten-Tab einstellbare Wert komplett wirkungslos.
+  if (factors.laborMarkup > 0) {
+    const laborSum = positions.filter(p => p.category === 'Lohn').reduce((s, p) => s + p.total, 0);
+    if (laborSum > 0) {
+      const zuschlag = laborSum * factors.laborMarkup / 100;
+      positions.push({
+        id: 'labor_markup', category: 'Lohn',
+        description: `Lohnzuschlag ${factors.laborMarkup} % (Erschwernis / Zulagen)`,
+        quantity: 1, unit: 'pauschal', unitPrice: +zuschlag.toFixed(2), total: +zuschlag.toFixed(2),
+        source: 'default',
+      });
+      subtotals.labor += zuschlag;
+    }
+  }
+
   const baseSum = positions.reduce((s, p) => s + p.total, 0);
   const overhead = baseSum * factors.overhead / 100;
   const profit = (baseSum + overhead) * factors.profit / 100;

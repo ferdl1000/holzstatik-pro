@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "truckpilot-dev",
+      "runtimeExecutable": "C:\\Users\\JOSEFW~1\\AppData\\Local\\Temp\\claude\\C--Users-Josef-Wilfinger-Downloads-Cowork-dachplan-assistent\\37a034dc-b0b1-45ad-88aa-2aa68efe8cb5\\scratchpad\\start-truckpilot.cmd",
+      "runtimeArgs": [],
+      "port": 8080
+    },
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 8080
+    }
+  ]
+}

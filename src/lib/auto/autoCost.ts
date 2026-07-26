@@ -106,6 +106,72 @@ function buildDeckPlankPositions(roofForm: string, hasLeimbinder: boolean, roofA
   return out;
 }
 
+/**
+ * Zimmerei-Nebenleistungen, die in JEDEM echten Angebot stehen, bisher aber
+ * komplett gefehlt haben: Abbund, Kran/Aufstellhilfe, Anlieferung des
+ * Konstruktionsholzes und Baustelleneinrichtung. Alle Ansätze sind
+ * Erfahrungswerte für die Oststeiermark und im Kosten-Tab überschreibbar.
+ */
+function buildZimmereiNebenleistungen(timberVolume: number, roofArea: number, hasGlulam: boolean): CostPosition[] {
+  if (timberVolume <= 0) return [];
+  const out: CostPosition[] = [];
+
+  // Abbund (Zuschnitt): CNC-Abbund eines Standard-Dachstuhls
+  const abbundSatz = 95; // €/m³
+  out.push({
+    id: 'abbund',
+    description: 'Abbund Konstruktionsholz (CNC, inkl. Kerven, Schmiegen, Zierschnitt)',
+    category: 'Lohn',
+    quantity: +timberVolume.toFixed(2),
+    unit: 'm³',
+    unitPrice: abbundSatz,
+    total: +(timberVolume * abbundSatz).toFixed(2),
+    notes: 'Erfahrungswert Standard-Dachstuhl. Handabbund oder aufwendige Anschlüsse teurer.',
+  });
+
+  // Anlieferung Konstruktionsholz (Sondertransport für BSH läuft separat)
+  if (!hasGlulam) {
+    out.push({
+      id: 'anlieferung',
+      description: 'Anlieferung Konstruktionsholz auf die Baustelle',
+      category: 'Lohn',
+      quantity: 1, unit: 'pauschal', unitPrice: 280, total: 280,
+      notes: 'LKW-Fuhre innerhalb der Region. Bei weiter Anfahrt anpassen.',
+    });
+  }
+
+  // Kran / Aufstellhilfe (bei BSH wird der Kran bereits separat verrechnet)
+  if (!hasGlulam) {
+    out.push({
+      id: 'kran_aufstellen',
+      description: 'Kran / Aufstellhilfe (Halbtag) für das Aufrichten des Dachstuhls',
+      category: 'Lohn',
+      quantity: 1, unit: 'pauschal', unitPrice: 490, total: 490,
+      notes: 'Halber Tagessatz Mobilkran inkl. Bediener.',
+    });
+  }
+
+  // Baustelleneinrichtung + Nebenleistungen
+  out.push({
+    id: 'baustelle',
+    description: 'Baustelleneinrichtung, Absturzsicherung, Nebenleistungen',
+    category: 'Lohn',
+    quantity: 1, unit: 'pauschal', unitPrice: 350, total: 350,
+    notes: 'Ohne Gerüststellung — Gerüst wird üblicherweise vom Bauherrn beigestellt.',
+  });
+
+  // Werk-/Abbundplan
+  out.push({
+    id: 'werkplan',
+    description: 'Werk- und Abbundplan, Aufmaß vor Ort',
+    category: 'Lohn',
+    quantity: 1, unit: 'pauschal', unitPrice: 380, total: 380,
+    notes: `Bezogen auf ${Math.round(roofArea)} m² Dachfläche.`,
+  });
+
+  return out;
+}
+
 /** Transport-Positionen aus computeTransportPlan ableiten */
 function buildTransportPositions(plan: TransportPlan): CostPosition[] {
   if (plan.segments.length === 0) return [];
@@ -210,29 +276,57 @@ function buildJointPositions(joints: JointSpec[], withLabor: boolean): CostPosit
 
 /** Fügt Stoßstellen-Positionen in eine CostEstimate ein und aktualisiert Subtotals/Net/Vat/Gross */
 function injectJointsIntoEstimate(estimate: CostEstimate, joints: JointSpec[], withLabor: boolean): CostEstimate {
-  const jointPositions = buildJointPositions(joints, withLabor);
-  if (jointPositions.length === 0) return estimate;
-  const positions = [...estimate.positions, ...jointPositions];
-  const addFasteners = jointPositions.filter(p => p.category === 'Verbinder').reduce((s, p) => s + p.total, 0);
-  const addLabor = jointPositions.filter(p => p.category === 'Lohn').reduce((s, p) => s + p.total, 0);
-  const addNet = addFasteners + addLabor;
-  const newNet = estimate.net + addNet;
-  // Recalculate vat and gross proportionally (reuse existing vatRate)
-  const vatRate = estimate.factors.vat;
-  const newVat = estimate.vat + addNet * vatRate / 100;
-  const newGross = newNet + newVat;
+  return addPositionsToEstimate(estimate, buildJointPositions(joints, withLabor), withLabor);
+}
+
+/**
+ * Fügt Positionen in eine fertige CostEstimate ein und rechnet Gemeinkosten,
+ * Gewinn und MwSt korrekt NACH. Vorher wurden nachträglich eingefügte
+ * Positionen (Verschalung, Transport, Stöße) nur auf netto addiert — sie
+ * bekamen weder Gemeinkosten- noch Gewinnaufschlag, und die ausgewiesenen
+ * Prozentsätze stimmten nicht mehr mit den Beträgen überein.
+ */
+function addPositionsToEstimate(est: CostEstimate, extras: CostPosition[], applySurcharges: boolean): CostEstimate {
+  if (extras.length === 0) return est;
+  const positions = [...est.positions, ...extras];
+  const addBase = extras.reduce((s, p) => s + p.total, 0);
+
+  const ovRate = applySurcharges ? est.factors.overhead / 100 : 0;
+  const prRate = applySurcharges ? est.factors.profit / 100 : 0;
+  const addOverhead = addBase * ovRate;
+  const addProfit = (addBase + addOverhead) * prRate;
+  const addNet = addBase + addOverhead + addProfit;
+  const vatRate = est.factors.vat;
+  const addVat = addNet * vatRate / 100;
+
+  const subtotals = { ...est.subtotals };
+  for (const p of extras) {
+    if (p.category === 'Holz' || p.category === 'Holz (individuell)') subtotals.material += p.total;
+    else if (p.category === 'Eindeckung') subtotals.covering += p.total;
+    else if (p.category === 'Dämmung' || p.category === 'Folien') subtotals.insulation += p.total;
+    else if (p.category === 'Verbinder') subtotals.fasteners += p.total;
+    else if (p.category === 'Lohn') subtotals.labor += p.total;
+    else subtotals.other += p.total;
+  }
+
+  const net = est.net + addNet;
+  const vat = est.vat + addVat;
+  const gross = net + vat;
+
+  const surcharges = est.appliedSurcharges.map(s => {
+    if (s.name.startsWith('Gemeinkosten')) return { ...s, amount: s.amount + addOverhead };
+    if (s.name.startsWith('Unternehmergewinn')) return { ...s, amount: s.amount + addProfit };
+    if (s.name.startsWith('Umsatzsteuer')) return { ...s, amount: s.amount + addVat };
+    return s;
+  });
+
   return {
-    ...estimate,
+    ...est,
     positions,
-    subtotals: {
-      ...estimate.subtotals,
-      fasteners: estimate.subtotals.fasteners + addFasteners,
-      labor: estimate.subtotals.labor + addLabor,
-    },
-    net: newNet,
-    vat: newVat,
-    gross: newGross,
-    summary: `Gesamt brutto: ${newGross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${newNet.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
+    subtotals,
+    net, vat, gross,
+    appliedSurcharges: surcharges,
+    summary: `Gesamt brutto: ${gross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${net.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
   };
 }
 
@@ -386,32 +480,21 @@ export function autoComputeCosts(
   const transportPlan = includeTransport ? computeTransportPlan(members) : undefined;
   const plankPositions = includeDeckPlanks ? buildDeckPlankPositions(roofForm, hasLeimbinder, totalRoofArea) : [];
   const transportPositions = transportPlan ? buildTransportPositions(transportPlan) : [];
+  const timberVolume = members.reduce(
+    (s, m) => s + (m.width / 1000) * (m.height / 1000) * m.length * m.quantity, 0,
+  );
+  const nebenleistungen = buildZimmereiNebenleistungen(timberVolume, totalRoofArea, hasLeimbinder);
 
   function injectExtras(est: CostEstimate, withLaborMode: boolean): CostEstimate {
     const extras: CostPosition[] = [
       ...plankPositions,
-      ...(withLaborMode ? transportPositions : []),  // Transport nur in withLabor
+      // Abbund, Anlieferung, Kran, Baustelleneinrichtung, Werkplan: nur in der
+      // Voll-Kalkulation, nicht in der reinen Materialliste.
+      ...(withLaborMode ? [...transportPositions, ...nebenleistungen] : []),
     ];
-    if (extras.length === 0) return est;
-    const positions = [...est.positions, ...extras];
-    const addNet = extras.reduce((s, p) => s + p.total, 0);
-    const vatRate = est.factors.vat;
-    const newNet = est.net + addNet;
-    const newVat = est.vat + addNet * vatRate / 100;
-    const newGross = newNet + newVat;
-    const addMaterial = plankPositions.reduce((s, p) => s + p.total, 0);
-    const addLabor = withLaborMode ? transportPositions.reduce((s, p) => s + p.total, 0) : 0;
-    return {
-      ...est,
-      positions,
-      subtotals: {
-        ...est.subtotals,
-        material: est.subtotals.material + addMaterial,
-        labor: est.subtotals.labor + addLabor,
-      },
-      net: newNet, vat: newVat, gross: newGross,
-      summary: `Gesamt brutto: ${newGross.toLocaleString('de-AT', { maximumFractionDigits: 0 })} € (netto ${newNet.toLocaleString('de-AT', { maximumFractionDigits: 0 })} €, ${positions.length} Positionen).`,
-    };
+    // In der Voll-Kalkulation bekommen die Zusatzpositionen Gemeinkosten und
+    // Gewinn wie jede andere Position; in der reinen Materialliste nicht.
+    return addPositionsToEstimate(est, extras, withLaborMode);
   }
   const extraOrderItems: OrderListItem[] = plankPositions.map(p => ({
     supplier: 'Sägewerk' as const,
@@ -508,18 +591,7 @@ export function autoComputeCosts(
   // Holzständerwand-Pauschalposition wenn vorhanden
   const wallItems = buildWallConstructionPositions(opts?.wallConstructions, opts?.floorAreaPerLevel ?? groundArea);
   if (wallItems.length > 0) {
-    const wallNet = wallItems.reduce((s, p) => s + p.total, 0);
-    const vatRate = withLabor.factors.vat;
-    const wallVat = wallNet * vatRate / 100;
-    withLabor = {
-      ...withLabor,
-      positions: [...withLabor.positions, ...wallItems],
-      subtotals: { ...withLabor.subtotals, labor: withLabor.subtotals.labor + wallNet },
-      net: withLabor.net + wallNet,
-      vat: withLabor.vat + wallVat,
-      gross: withLabor.gross + wallNet + wallVat,
-      summary: `Gesamt brutto: ${(withLabor.gross + wallNet + wallVat).toLocaleString('de-AT', { maximumFractionDigits: 0 })} € inkl. Holzständerwände.`,
-    };
+    withLabor = addPositionsToEstimate(withLabor, wallItems, true);
     orderList = [...orderList, ...wallItems.map(p => ({
       supplier: 'Sonstiges' as const,
       description: p.description,
