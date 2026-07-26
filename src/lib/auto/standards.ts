@@ -49,21 +49,46 @@ export function lookupLengthRule(material: string): StandardLengthRule {
 // ─── Querschnitt-Reihen (kommerziell verfügbar) ────────────────────────────────
 
 /** Übliche KVH-Querschnitte (b/h in mm). Sortiert nach Tragfähigkeit aufsteigend. */
+/**
+ * KVH-Querschnitte, wie sie in der OSTSTEIERMARK tatsächlich verbaut und vom
+ * Sägewerk lagermäßig geliefert werden — nach Querschnittsfläche gestaffelt,
+ * damit der Optimierer immer die nächste WIRKLICH ERHÄLTLICHE Stufe wählt.
+ *
+ * Wichtig sind die Zwischenstufen 8/22 und 8/24: das sind die Standard-Sparren
+ * für größere Sparrenlängen. Ohne sie springt die Bemessung von 8/20 gleich auf
+ * 10/20 und verteuert das Angebot ohne Not.
+ */
 export const KVH_PROFILES: Array<{ b: number; h: number; label: string }> = [
-  { b: 60, h: 120,  label: '6/12'  },
-  { b: 60, h: 140,  label: '6/14'  },
-  { b: 60, h: 160,  label: '6/16'  },
-  { b: 80, h: 140,  label: '8/14'  },
-  { b: 80, h: 160,  label: '8/16'  },
-  { b: 80, h: 180,  label: '8/18'  },
-  { b: 80, h: 200,  label: '8/20'  },
+  { b: 60, h: 120, label: '6/12' },
+  { b: 60, h: 140, label: '6/14' },
+  { b: 60, h: 160, label: '6/16' },
+  { b: 60, h: 180, label: '6/18' },
+  { b: 80, h: 140, label: '8/14' },
+  { b: 60, h: 200, label: '6/20' },
+  { b: 80, h: 160, label: '8/16' },
+  { b: 80, h: 180, label: '8/18' },
+  { b: 80, h: 200, label: '8/20' },
+  { b: 100, h: 160, label: '10/16' },
+  { b: 80, h: 220, label: '8/22' },
+  { b: 100, h: 180, label: '10/18' },
+  { b: 80, h: 240, label: '8/24' },
+  { b: 120, h: 160, label: '12/16' },
   { b: 100, h: 200, label: '10/20' },
   { b: 100, h: 220, label: '10/22' },
   { b: 100, h: 240, label: '10/24' },
+  { b: 120, h: 200, label: '12/20' },
+  { b: 140, h: 180, label: '14/18' },
   { b: 100, h: 260, label: '10/26' },
+  { b: 120, h: 220, label: '12/22' },
   { b: 120, h: 240, label: '12/24' },
+  { b: 140, h: 220, label: '14/22' },
+  { b: 120, h: 260, label: '12/26' },
   { b: 120, h: 280, label: '12/28' },
   { b: 140, h: 240, label: '14/24' },
+  { b: 160, h: 220, label: '16/22' },
+  { b: 140, h: 260, label: '14/26' },
+  { b: 160, h: 240, label: '16/24' },
+  { b: 140, h: 280, label: '14/28' },
   { b: 160, h: 280, label: '16/28' },
 ];
 
@@ -85,14 +110,32 @@ export const BSH_PROFILES: Array<{ b: number; h: number; label: string }> = [
   { b: 240, h: 1000, label: '24/100' },
 ];
 
+/**
+ * Nächstgrößeres Profil — nach WIDERSTANDSMOMENT, nicht nach Fläche.
+ *
+ * Ein Zimmermeister stuft einen Sparren von 8/22 auf 8/24 hoch: gleiche Breite,
+ * mehr Höhe. Er wechselt NICHT auf 10/18, obwohl das mehr Querschnittsfläche
+ * hat — denn tragend ist W = b·h²/6, und 8/24 trägt deutlich mehr als 10/18
+ * bei weniger Holz. Vorher wurde nach Fläche gestuft und deshalb genau dieser
+ * unwirtschaftliche Sprung gemacht.
+ *
+ * Regel: unter allen Profilen mit größerem W zuerst dasselbe Breitenmaß
+ * (Höhe wächst, der Zimmerer bleibt bei seinem Holz), sonst das nächstgrößere
+ * W überhaupt.
+ */
 export function nextLargerProfile(
   current: { b: number; h: number },
   isBSH: boolean,
 ): { b: number; h: number; label: string } | null {
   const list = isBSH ? BSH_PROFILES : KVH_PROFILES;
-  const currentArea = current.b * current.h;
-  const next = list.find(p => p.b * p.h > currentArea);
-  return next ?? null;
+  const W = (p: { b: number; h: number }) => (p.b * p.h * p.h) / 6;
+  const wCur = W(current);
+  const groesser = list.filter(p => W(p) > wCur * 1.0001);
+  if (groesser.length === 0) return null;
+  const kleinstesW = (arr: typeof groesser) =>
+    arr.reduce((best, p) => (W(p) < W(best) ? p : best));
+  const gleicheBreite = groesser.filter(p => p.b === current.b);
+  return gleicheBreite.length > 0 ? kleinstesW(gleicheBreite) : kleinstesW(groesser);
 }
 
 // ─── Stoßstellen-Logik ─────────────────────────────────────────────────────────
