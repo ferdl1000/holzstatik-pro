@@ -102,8 +102,28 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   );
   // Korrigierte Werte als Basis für die restliche Pipeline verwenden
   const validatedGeometry  = preValidation.geometry;
-  const validatedRoofParts = preValidation.roofParts;
   const preValidationAssumptions: AutoAssumption[] = preValidation.allCorrections;
+
+  // ── Dachform je Dachteil geraderücken, BEVOR gerechnet wird ──────────────
+  // Aus der Plananalyse kommt es vor, dass ein Dachteil als "flachdach" geführt
+  // wird, obwohl er 5° Neigung hat und im Namen "Pultdach" steht. Beim Flachdach
+  // spannt der Sparren über die volle Breite und der Schnee bleibt voll liegen —
+  // die falsche Form verfälscht Sparrenlänge, Last und Zeichnung auf einmal.
+  // Statt das nur zu melden, wird es hier aufgelöst: die NEIGUNG entscheidet.
+  const validatedRoofParts = preValidation.roofParts?.map((rp) => {
+    if (rp.form !== 'flachdach' || rp.geometry.pitch < 3) return rp;
+    const ausLabel = /pult/i.test(rp.label) ? 'pultdach'
+      : /sattel/i.test(rp.label) ? 'satteldach'
+      : 'pultdach';   // eine geneigte Fläche ohne First ist ein Pultdach
+    preValidationAssumptions.push({
+      field: `roofParts.${rp.id}.form`,
+      value: ausLabel,
+      reason: `Korrektur: „${rp.label}" war als Flachdach geführt, hat aber ${rp.geometry.pitch}° Neigung — als ${ausLabel} gerechnet. ` +
+        `Ein Flachdach im Sinn der Norm hat unter 3°; darüber spannt der Sparren anders und die Schneelast wird nach der Neigung abgemindert. BITTE AM PLAN PRÜFEN.`,
+      source: 'derived',
+    });
+    return { ...rp, form: ausLabel as typeof rp.form };
+  });
 
   // ── 1. Geometrie ableiten ────────────────────────────────────────────────
 
@@ -111,6 +131,22 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
   const structuralSystemAssumptions: AutoAssumption[] = [];
   const roofFormSanitized = sanitizeRoofForm(project.roofType?.form);
   if (roofFormSanitized.assumption) structuralSystemAssumptions.push(roofFormSanitized.assumption);
+
+  // Das HAUPTDACH bestimmt die Dachform des Projekts. Kam aus der Analyse
+  // "Satteldach" für das Projekt, aber der Hauptdachteil ist ein Pultdach, dann
+  // gilt der Dachteil — er trägt die konkrete Geometrie, aus der gerechnet und
+  // gezeichnet wird. Sonst stehen zwei Formen im selben Projekt.
+  const hauptdachteil = validatedRoofParts?.find(rp => rp.kind === 'main') ?? validatedRoofParts?.[0];
+  if (hauptdachteil && !project.roofType?.userConfirmed && hauptdachteil.form !== roofFormSanitized.form) {
+    structuralSystemAssumptions.push({
+      field: 'roofType.form',
+      value: hauptdachteil.form,
+      reason: `Korrektur: Das Projekt war als „${roofFormSanitized.form}" geführt, das Hauptdach „${hauptdachteil.label}" ist aber ein ${hauptdachteil.form}. ` +
+        `Die Form des Hauptdachs ist maßgebend — sie trägt die Geometrie, aus der Sparrenlänge, Lasten und Zeichnung entstehen.`,
+      source: 'derived',
+    });
+    roofFormSanitized.form = hauptdachteil.form;
+  }
 
   const roofTypeRaw: RoofType = project.roofType
     ? { ...project.roofType, form: roofFormSanitized.form }
