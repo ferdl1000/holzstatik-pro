@@ -36,12 +36,18 @@ describe('Schneelast', () => {
     });
     expect(r.s).toBeLessThan(1.5);
   });
-  it('Steildach >60° = kein Schnee', () => {
+  it('Steildach >60° wird NICHT auf null abgemindert', () => {
+    // EC1-1-3 Abschn. 5.3.4: die Abminderung für steile Dächer gilt nur, wenn
+    // der Schnee wirklich abrutschen kann. Bei Schneefanggittern, Attiken oder
+    // anderen Hindernissen darf nicht abgemindert werden — und ob es ein Gitter
+    // gibt, steht im Einreichplan meist nicht. Für eine Vorstatik wird deshalb
+    // der ungünstige Fall angesetzt statt "gar keine Schneelast".
     const r = calculateSnowLoad({
       zone: '4', altitude: 1000, roofPitch: 70, roofForm: 'satteldach',
       exposure: 'normal', heated: false,
     });
-    expect(r.mu).toBe(0);
+    expect(r.mu).toBe(0.8);
+    expect(r.s).toBeGreaterThan(0);
   });
 });
 

@@ -10,7 +10,7 @@
 import type { BuildingGeometry, RoofType, StructuralSystem, TimberMember, CeilingArea, WallConstruction } from '@/types/project';
 import type { AutoAssumption, AutoMembersResult } from '@/lib/auto/contracts';
 import type { JointSpec } from '@/lib/auto/standards';
-import { splitMemberAtJoints, suggestCeilingBeam } from '@/lib/auto/standards';
+import { splitMemberAtJoints, suggestCeilingBeam, KEHLBALKEN_HOEHENFAKTOR } from '@/lib/auto/standards';
 import { sanitizeGeometry, sanitizeStructuralSystemType } from '@/lib/auto/sanitize';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -455,8 +455,10 @@ export function autoGenerateMembers(
   // ── Tragsystem-spezifische Zusatzbauteile ────────────────────────────────
 
   if (sysType === 'kehlbalkendach') {
-    // Kehlbalken: jeder 2. Sparren (Sparrenpaar), auf 2/3 der Firsthöhe
-    const kehlbalkenHoehe = eavesH + (2 / 3) * ridgeHeight;
+    // Kehlbalken: jeder 2. Sparren (Sparrenpaar), auf 2/3 der Firsthöhe.
+    // Faktor zentral in standards.ts, damit 3D-Ansicht und Schnitte den
+    // Kehlbalken an derselben Stelle zeichnen, an der er gerechnet wird.
+    const kehlbalkenHoehe = eavesH + KEHLBALKEN_HOEHENFAKTOR * ridgeHeight;
     const kehlbalkenLen = +(buildingWidth * (ridgeH - kehlbalkenHoehe) / ridgeHeight).toFixed(2);
     // horizontale Länge auf Kehlhöhe (ähnliche Dreiecksrechnung)
     const kehlLen = +(buildingWidth * (1 - (kehlbalkenHoehe - eavesH) / ridgeHeight)).toFixed(2);
@@ -465,7 +467,7 @@ export function autoGenerateMembers(
     assumptions.push({
       field: 'kehlbalken.position',
       value: `${+(kehlbalkenHoehe).toFixed(2)} m ü. FFB`,
-      reason: `Kehlbalken auf 2/3 der Firsthöhe (${+(2 / 3 * 100).toFixed(0)} %) positioniert (Regelwerk).`,
+      reason: `Kehlbalken auf ${+(KEHLBALKEN_HOEHENFAKTOR * 100).toFixed(0)} % der Firsthöhe positioniert (Regelwerk 2/3).`,
       source: 'standard',
     });
 

@@ -7,6 +7,16 @@
 
 import type { TimberMember } from '@/types/project';
 
+// ─── Regelmaße des Dachstuhls ─────────────────────────────────────────────────
+
+/**
+ * Höhenlage des Kehlbalkens, gemessen von der Traufe als Anteil der Sprunghöhe
+ * (Regelwerk: 2/3). Diese Konstante ist die EINZIGE Quelle — Bauteilerzeugung,
+ * 3D-Ansicht und Schnitte müssen sie gemeinsam verwenden, sonst zeichnet die
+ * 3D-Ansicht Kehlbalken an einer anderen Stelle als die Stückliste sie ausweist.
+ */
+export const KEHLBALKEN_HOEHENFAKTOR = 2 / 3;
+
 // ─── Standard-Lieferlängen ─────────────────────────────────────────────────────
 
 export interface StandardLengthRule {

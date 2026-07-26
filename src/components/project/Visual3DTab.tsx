@@ -69,6 +69,7 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
           roofForm={project.roofType?.form ?? 'satteldach'}
           members={project.members ?? []}
           coveringName={project.coveringType?.type}
+          roofOverhang={project.roofOverhang}
         />
       </div>
     </div>

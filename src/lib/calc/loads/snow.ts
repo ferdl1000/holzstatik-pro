@@ -70,7 +70,13 @@ export function shapeFactor(roofPitch: number, form: SnowLoadInput['roofForm']):
   if (form === 'flachdach') return 0.8;
   if (alpha <= 30) return 0.8;
   if (alpha < 60) return 0.8 * (60 - alpha) / 30;
-  return 0; // > 60° → kein Schnee dauerhaft
+  // > 60°: der Schnee rutscht ab — ABER nur, wenn er das auch kann.
+  // EC1-1-3 Abschn. 5.3.4: bei Schneefanggittern, Attiken oder anderen
+  // Hindernissen darf NICHT abgemindert werden. Ob ein Gitter vorhanden ist,
+  // lässt sich aus dem Einreichplan nicht sicher ablesen; für eine Vorstatik
+  // wird deshalb der ungünstige Fall angesetzt (vorher: μ = 0, also gar keine
+  // Schneelast auf steilen Dächern).
+  return 0.8;
 }
 
 /**

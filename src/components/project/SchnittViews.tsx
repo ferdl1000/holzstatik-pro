@@ -115,8 +115,8 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
   // SVG koordinaten (y zeigt nach unten, 0 = Boden)
   const toSX = (mx: number) => pad.l + xOff + mx * s;
   const toSY = (my: number) => pad.t + drawH - my * s;
-  /** Querschnittsmaß [mm] → px, im selben Maßstab (Mindestmaß nur zur Sichtbarkeit) */
-  const px = (mm: number) => Math.max(3, (mm / 1000) * s);
+  /** Querschnittsmaß [mm] → px, im selben Maßstab (2 px nur als Sichtbarkeits-Untergrenze) */
+  const px = (mm: number) => Math.max(2, (mm / 1000) * s);
 
   const isPult = roofForm === 'pultdach';
   const isFlach = roofForm === 'flachdach';
@@ -151,6 +151,11 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
   // Dachüberstand aus dem Projekt (gleicher Wert wie in der Mengenermittlung)
   const ueberstand = roofOverhang ?? DEFAULT_ROOF_OVERHANG;
   const wandDicke = 0.30; // m — Mauerkrone/Außenwand im Schnitt
+
+  // Neigung, die sich aus Trauf-/Firsthöhe und Spannweite tatsächlich ergibt —
+  // das ist die Linie, die gezeichnet wird (und die der Bogen bemaßen muss).
+  const tanRoof = (yRidge - yEaves) / Math.max(isPult ? bldW : halfSpan, 0.1);
+  const pitchDrawn = isFlach ? 0 : (Math.atan(tanRoof) * 180) / Math.PI;
 
   // Aufbau-Schichten: Dicke in m (symbolisch)
   const lattH = 0.04;
@@ -187,7 +192,7 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
         const fpB = px(firstPf?.width ?? 100), fpH = px(firstPf?.height ?? 220);
         const mpB = px(mittelPf?.width ?? 100), mpH = px(mittelPf?.height ?? 220);
         const ov = ueberstand; // Dachüberstand im Schnitt [m] — aus dem Projekt
-        const tanP = isFlach ? 0.03 : (yRidge - yEaves) / Math.max(isPult ? bldW : halfSpan, 0.1);
+        const tanP = isFlach ? 0.03 : tanRoof;
         const sw = sparren ? px(sparren.height) : 3; // Sparrenlinie = echte Sparrenhöhe
         // NUR zeichnen, was die Statik wirklich vorsieht — beim Sparrendach gibt
         // es KEINE First-/Mittelpfetten (die Zeichnung folgt der Bauteilliste).
@@ -338,22 +343,26 @@ function Querschnitt({ geometry, members, coveringName, roofForm, roofOverhang }
         />
       )}
 
-      {/* Dachneigung-Bogen + Text */}
+      {/* Dachneigung-Bogen + Text — der Bogen zeigt die TATSÄCHLICH gezeichnete
+          Neigung (aus Trauf-/Firsthöhe und Spannweite). Weicht sie vom Plan-Wert
+          ab, wird dieser zusätzlich ausgewiesen statt stillschweigend ersetzt. */}
       {(() => {
         const cx = toSX(xL), cy = toSY(yEaves);
         const r = 36;
-        const endAngle = -pitchDeg;
+        const endAngle = -pitchDrawn;
         const toRad = (d: number) => (d * Math.PI) / 180;
         const ex = cx + r * Math.cos(toRad(endAngle));
         const ey = cy + r * Math.sin(toRad(endAngle));
-        const largeArc = pitchDeg > 180 ? 1 : 0;
+        const largeArc = pitchDrawn > 180 ? 1 : 0;
         return (
           <g>
             <path
               d={`M ${cx + r},${cy} A ${r},${r} 0 ${largeArc},0 ${ex},${ey}`}
               fill="none" stroke="#888" strokeWidth={0.9}
             />
-            <text x={cx + r + 8} y={cy - 10} fill="#555" fontSize={11} fontFamily="sans-serif">{fmtDeg(pitchDeg)}</text>
+            <text x={cx + r + 8} y={cy - 10} fill="#555" fontSize={11} fontFamily="sans-serif">
+              {fmtDeg(pitchDrawn)}{Math.abs(pitchDrawn - pitchDeg) > 1 ? ` (Plan ${fmtDeg(pitchDeg)})` : ''}
+            </text>
           </g>
         );
       })()}
@@ -588,20 +597,29 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
   const ueberstand = roofOverhang ?? DEFAULT_ROOF_OVERHANG;    // m — wie in der Mengenermittlung
   const mauerH = 0.24, mauerB = 0.30;                          // m Mauerkrone (dargestellter Ausschnitt)
 
-  // Kerventiefe: höchstens h/4 UND nur so tief, dass die waagrechte Sohle
-  // (Länge = t / tan α) die Mauerbank nicht überläuft.
-  const klaueTiefe = Math.min(0.04, sparH / 4, pfetteB * tanA);
+  // Kerventiefe: höchstens h/4, nur so tief, dass die waagrechte Sohle
+  // (Länge = t / tan α) die Mauerbank nicht überläuft, und nie tiefer als die
+  // Mauerbank hoch ist (sonst säße der Sparren auf der Mauerkrone auf).
+  const klaueTiefe = Math.min(0.04, sparH / 4, pfetteB * tanA, pfetteH * 0.8);
 
-  // Maßstab so, dass Überstand + Mauer + Sparren-Innenteil sicher ins Bild passen
-  const innenM = 0.9;   // m sichtbarer Sparren Richtung First
-  const sc = Math.min(200, (W - 110) / Math.max(ueberstand + mauerB + innenM, 0.6));
+  // ── Maßstab: waagrecht UND lotrecht muss alles ins Bild passen ────────────
+  const innenM = 0.9;                                  // m sichtbarer Sparren Richtung First
+  const leftM = 150, rightM = 115, topM = 40, botM = 55; // Freiräume für Legende/Nebenriss/Maße
+  // maßstabsfreie Ausdehnungen, gemessen ab OK Mauerbank [m]
+  const extAbove = (mauerB + innenM - 0.02) * tanA + sparH / cosA - klaueTiefe;
+  const extBelow = Math.max(klaueTiefe + (ueberstand + 0.02) * tanA, pfetteH + mauerH);
+  const scH = (W - leftM - rightM) / Math.max(ueberstand + mauerB + innenM, 0.6);
+  const scV = (H - topM - botM) / Math.max(extAbove + extBelow, 0.4);
+  const sc = Math.min(300, scH, scV);
 
   // ── Bezugsgrößen (x = waagrecht, y = SVG nach unten) ──────────────────────
-  const mxOuter = 70 + ueberstand * sc;    // Mauer-AUSSENKANTE — Bezugspunkt des Überstandsmaßes
-  const oy = 340;                          // UK des dargestellten Mauerausschnitts
-  const yMauerOK = oy - mauerH * sc;       // OK Mauerkrone
+  const totalX = (ueberstand + mauerB + innenM) * sc;
+  const xOut = leftM + ((W - leftM - rightM) - totalX) / 2;  // Sparren-Traufende (lotrechter Abschnitt)
+  const mxOuter = xOut + ueberstand * sc;  // Mauer-AUSSENKANTE — Bezugspunkt des Überstandsmaßes
   const pfX = mxOuter + 0.02 * sc;         // Mauerbank liegt AUF der Krone (2 cm eingerückt)
-  const pfOK = yMauerOK - pfetteH * sc;    // OK Mauerbank == Höhe der KERVENSOHLE
+  const pfOK = topM + extAbove * sc;       // OK Mauerbank == Höhe der KERVENSOHLE
+  const yMauerOK = pfOK + pfetteH * sc;    // OK Mauerkrone
+  const oy = yMauerOK + mauerH * sc;       // UK des dargestellten Mauerausschnitts
 
   const klaueD = klaueTiefe * sc;          // Kerventiefe [px]
   const xStoss = pfX;                      // talseitige (äußere) Flanke der Mauerbank
@@ -616,10 +634,10 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
   const ukY = (x: number) => ukRefY - (x - ukRefX) * tanA;
   const okY = (x: number) => ukY(x) - hV;
 
-  // Sparrenenden: lotrechte Abschnitte (wie beim Abbund)
-  const xOut = mxOuter - ueberstand * sc;                // Traufende = Mauer-Außenkante − Überstand
-  const xInn = mxOuter + (mauerB + innenM) * sc;         // Bildkante Richtung First
-  const fase = Math.min(0.10 * sc, sparH * sc * 0.45);   // Zierschnitt am Sparrenende
+  // Bildkante Richtung First (lotrechter Schnitt)
+  const xInn = mxOuter + (mauerB + innenM) * sc;
+  // Zierschnitt am Sparrenende — nie so groß, dass er in die Kerve läuft
+  const fase = Math.min(0.10 * sc, sparH * sc * 0.45, Math.max(1, (xStoss - xOut) * 0.6));
 
   // Kerve = waagrechte Sohle + TALSEITIGER lotrechter Stoß (Dreieck im Anriss)
   const kStossFuss = { x: xStoss, y: ukY(xStoss) };      // Stoßfuß, auf der Unterkante
@@ -651,7 +669,8 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
     { d: 16, c: '#8a5a2b', n: 'Lattung 3/5 + Eindeckung' },
   ];
 
-  const yUeberDim = oy + 26;
+  // Überstands-Maßlinie unter allem, was in diesem Bereich gezeichnet wird
+  const yUeberDim = Math.min(Math.max(oy, ukY(xOut)) + 26, H - 12);
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
@@ -691,17 +710,32 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
         points={sparrenPts.map(p => `${p[0]},${p[1]}`).join(' ')}
         fill="url(#dt-wood)" stroke="#333" strokeWidth={1.5}
       />
-      <text
-        x={(xOut + xStoss) / 2} y={okY((xOut + xStoss) / 2) - 22}
-        fill="#555" fontSize={10} fontFamily="sans-serif"
-        transform={`rotate(${-pitchDeg},${(xOut + xStoss) / 2},${okY((xOut + xStoss) / 2) - 22})`}
-      >Sparren {sparren ? (sparren.crossSection ?? `${sparren.width}/${sparren.height}`) : ''}</text>
+      {(() => {
+        const lx = (kSohleAus.x + xInn) / 2, ly = okY((kSohleAus.x + xInn) / 2) - 24;
+        return (
+          <text x={lx} y={ly} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle"
+                transform={`rotate(${-pitchDeg},${lx},${ly})`}>
+            Sparren {sparren ? (sparren.crossSection ?? `${sparren.width}/${sparren.height}`) : ''}
+          </text>
+        );
+      })()}
 
-      {/* Kerve beschriften */}
-      <line x1={kStossKopf.x + sohleLen / 2} y1={pfOK} x2={kStossKopf.x - 30} y2={pfOK + 46} stroke="#888" strokeWidth={0.7} />
-      <text x={kStossKopf.x - 34} y={pfOK + 50} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="end">
-        Kerve: Sohle waagrecht, Stoß lotrecht (talseitig)
-      </text>
+      {/* Kerve beschriften — Hinweislinie von der Sohle in den freien Keil
+          über dem Dachüberstand */}
+      {(() => {
+        const ty = Math.max(topM + 14, okY(xStoss) - 34);
+        return (
+          <g>
+            <line x1={xStoss + sohleLen / 2} y1={pfOK} x2={xStoss + 8} y2={ty + 2} stroke="#888" strokeWidth={0.7} />
+            <text x={xStoss + 6} y={ty} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="end">
+              Kerve: Sohle waagrecht auf OK Mauerbank,
+            </text>
+            <text x={xStoss + 6} y={ty + 12} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="end">
+              Stoß lotrecht talseitig, t = {Math.round(klaueTiefe * 1000)} mm
+            </text>
+          </g>
+        );
+      })()}
 
       {/* Sturmanker: verankert die Mauerbank in der Mauerkrone */}
       {(() => {
@@ -752,11 +786,12 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
         label={`Üst. ${fmt(ueberstand)}`}
       />
 
-      {/* Nebenriss: Sparren-Querschnitt b × h (b ist im Traufschnitt nicht sichtbar) */}
+      {/* Nebenriss: Sparren-Querschnitt b × h — die BREITE b ist in diesem
+          Schnitt (senkrecht zur Traufe) nicht sichtbar, deshalb als Nebenriss. */}
       {(() => {
         const nsc = 70 / Math.max(sparH, sparB, 0.05);
         const nb = sparB * nsc, nh = sparH * nsc;
-        const nx0 = W - 40 - nb, ny0 = 60;
+        const nx0 = W - 34 - nb, ny0 = 62;
         return (
           <g>
             <text x={nx0 + nb / 2} y={ny0 - 10} fill="#333" fontSize={10} fontFamily="sans-serif" textAnchor="middle" fontWeight="bold">Querschnitt</text>
@@ -764,18 +799,18 @@ function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingG
             <text x={nx0 + nb / 2} y={ny0 + nh + 13} fill="#555" fontSize={9} fontFamily="sans-serif" textAnchor="middle">
               b={sparren ? sparren.width : Math.round(sparB * 1000)} mm
             </text>
-            <text x={nx0 - 6} y={ny0 + nh / 2} fill="#555" fontSize={9} fontFamily="sans-serif" textAnchor="end" dominantBaseline="middle">
+            <text x={nx0 + nb / 2} y={ny0 + nh + 24} fill="#555" fontSize={9} fontFamily="sans-serif" textAnchor="middle">
               h={sparren ? sparren.height : Math.round(sparH * 1000)} mm
             </text>
           </g>
         );
       })()}
 
-      {/* Legende Dachaufbau */}
+      {/* Legende Dachaufbau — unten links, dort bleibt in jeder Neigung Platz */}
       <g fontSize={8} fontFamily="monospace" fill="#334155">
-        <text x={12} y={34} fontWeight="bold">Dachaufbau (Kaltdach):</text>
+        <text x={12} y={H - 52} fontWeight="bold">Dachaufbau (Kaltdach):</text>
         {aufbau.map((l, i) => (
-          <text key={`dt-leg-${l.n}`} x={12} y={44 + i * 10}>{i + 1}  {l.n}</text>
+          <text key={`dt-leg-${l.n}`} x={12} y={H - 42 + i * 10}>{i + 1}  {l.n}</text>
         ))}
       </g>
 

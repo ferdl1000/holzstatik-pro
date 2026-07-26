@@ -6,6 +6,7 @@ import type { TimberMember } from '@/types/project';
 import type { RoofPart } from '@/types/roofParts';
 import { Card } from '@/components/ui/card';
 import { InfoTooltip } from '@/components/help/InfoTooltip';
+import { KEHLBALKEN_HOEHENFAKTOR } from '@/lib/auto/standards';
 import { Boxes, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -60,7 +61,12 @@ function utilizationColor(eta: number | undefined): string {
  * sein — sonst zeigt die Zeichnung eine andere Lage/Länge als gerechnet wurde.
  * Die Kehlbalkenlänge folgt daraus zu B × (1 − Faktor).
  */
-export const KEHLBALKEN_HOEHENFAKTOR = 2 / 3;
+// Zentral in standards.ts definiert, damit Zeichnung und Statik denselben Wert
+// nutzen. ACHTUNG: hier bewusst importiert UND re-exportiert — ein reines
+// `export { X } from '...'` würde X NICHT in den lokalen Modul-Scope holen,
+// der Code unten liefe dann zur Laufzeit auf "X is not defined" (tsc merkt das
+// nicht).
+export { KEHLBALKEN_HOEHENFAKTOR };
 
 const COLORS = {
   wall: '#e8dcc4',
