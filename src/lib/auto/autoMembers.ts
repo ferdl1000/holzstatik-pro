@@ -133,12 +133,26 @@ export function autoGenerateMembers(
       : `Dachüberstand nicht im Plan beschriftet — Regelwert ${(overhang * 100).toFixed(0)} cm angesetzt (Sparrenlänge + Dachfläche entsprechend vergrößert).`,
     source: opts?.roofOverhang != null ? 'derived' : 'standard',
   });
+  // Beim Walmdach sind die Sparren im Bereich der Walmflächen keine vollen
+  // Sparren mehr, sondern Schifter (weiter unten eigens erfasst). Die Zahl der
+  // VOLLEN Sparren richtet sich deshalb nur nach der Firstlänge.
+  const walmAbzug =
+    _roofType.form === 'walmdach' ? buildingWidth :
+    _roofType.form === 'krueppelwalmdach' ? buildingWidth / 2 : 0;
+  const sparrenLaengsMass = Math.max(1, buildingLength - walmAbzug);
   const sparrenCount = isPultdachForm
     ? sparrenAnzahlPultdach(buildingLength, spacing)
-    : sparrenAnzahl(buildingLength, spacing);
+    : sparrenAnzahl(sparrenLaengsMass, spacing);
   const ridgeHeight = ridgeH - eavesH; // Höhe über Traufe
 
   const sysType = structuralSystem.type;
+
+  // Walmdach: der First endet vor der Stirnseite, dort laufen die Gratsparren
+  // zusammen. Krüppelwalm: nur der obere Teil ist abgewalmt.
+  const walmTiefeGesamt =
+    _roofType.form === 'walmdach' ? buildingWidth :
+    _roofType.form === 'krueppelwalmdach' ? buildingWidth / 2 : 0;
+  const firstLaenge = +Math.max(1, buildingLength - walmTiefeGesamt).toFixed(2);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HALLEN-MODUS (BSH-Binder, Großspannweiten >14 m oder Hallen-Tragwerk)
@@ -332,6 +346,57 @@ export function autoGenerateMembers(
     });
   }
 
+  // ── Walm / Krüppelwalm: Gratsparren + Schifter ───────────────────────────
+  // Ein Walmdach hat an den Stirnseiten keine Giebelwand, sondern eine geneigte
+  // Dachfläche. Dort laufen vier GRATSPARREN von der Traufecke zum Firstende,
+  // und die dazwischen liegenden Sparren sind SCHIFTER (unterschiedlich lang).
+  // Bisher bekam ein Walmdach exakt dieselbe Stückliste wie ein Satteldach —
+  // die Gratsparren und Schifter fehlten komplett, das Angebot war zu billig
+  // und die 3D-Ansicht zeigte Bauteile, die es in der Liste nicht gab.
+  const istWalm = _roofType.form === 'walmdach' || _roofType.form === 'krueppelwalmdach';
+  if (istWalm && !isPultdachForm) {
+    // Beim Krüppelwalm ist nur der obere Teil abgewalmt → halbe Walmtiefe
+    const walmTiefe = _roofType.form === 'walmdach' ? buildingWidth / 2 : buildingWidth / 4;
+    // Grat läuft diagonal: horizontal √(walmTiefe² + (Breite/2)²), dazu die Höhe
+    const gratHoriz = Math.sqrt(walmTiefe * walmTiefe + (buildingWidth / 2) * (buildingWidth / 2));
+    const gratLen = +(Math.sqrt(gratHoriz * gratHoriz + ridgeHeight * ridgeHeight) + overhangSlope).toFixed(2);
+    // Gratsparren tragen die Schifter → eine Querschnittsstufe stärker
+    members.push(makeMember({
+      idPrefix: 'GR',
+      name: 'Gratsparren G1-G4',
+      type: 'sparren',
+      material: 'C24',
+      width: sprSec.b,
+      height: sprSec.h + 40,
+      length: gratLen,
+      quantity: 4,
+      crossSection: `${sprSec.b / 10}/${(sprSec.h + 40) / 10}`,
+    }));
+
+    // Schifter je Walmseite: von voller bis fast null Länge → im Mittel halb
+    const schifterProSeite = Math.max(1, Math.round(walmTiefe / spacing));
+    const schifterAnzahl = schifterProSeite * 4;           // 2 Walmseiten × 2 Dachflächen
+    const schifterLen = +(sparrenLen / 2).toFixed(2);
+    members.push(makeMember({
+      idPrefix: 'SCH',
+      name: `Walmschifter SCH1-SCH${schifterAnzahl}`,
+      type: 'sparren',
+      material: 'C24',
+      width: sprSec.b,
+      height: sprSec.h,
+      length: schifterLen,
+      quantity: schifterAnzahl,
+      crossSection: `${sprSec.b / 10}/${sprSec.h / 10}`,
+    }));
+
+    assumptions.push({
+      field: 'walm.gratsparren',
+      value: `4 Gratsparren à ${gratLen} m, ${schifterAnzahl} Schifter à ${schifterLen} m (Mittelwert)`,
+      reason: `${_roofType.form === 'walmdach' ? 'Walmdach' : 'Krüppelwalmdach'}: Walmtiefe ${walmTiefe.toFixed(2)} m. Die vier Gratsparren sind eine Querschnittsstufe stärker gewählt, weil sie die Schifter tragen. Die Schifter sind unterschiedlich lang — für Menge und Preis ist der Mittelwert (halbe Sparrenlänge) angesetzt; für den Abbund zählt die Einzellänge aus dem Werkplan.`,
+      source: 'derived',
+    });
+  }
+
   // ── Mauerbank (Fußpfette): gehört zu JEDEM klassischen Dachstuhl ──────────
   // Liegt auf der Mauerkrone, nimmt die Sparrenfüße (Kerve) auf und wird mit
   // der Mauer verankert. Beidseitig über die volle Gebäudelänge.
@@ -434,7 +499,9 @@ export function autoGenerateMembers(
       material: 'C24',
       width: pfSec.b,
       height: pfSec.h,
-      length: buildingLength,
+      // Beim Walmdach ist der First KÜRZER als das Gebäude — er endet dort, wo
+      // die Gratsparren zusammenlaufen.
+      length: firstLaenge,
       quantity: 1,
       crossSection: `${pfSec.b / 10}/${pfSec.h / 10}`,
     }));
