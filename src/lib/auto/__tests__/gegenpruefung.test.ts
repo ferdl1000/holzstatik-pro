@@ -81,6 +81,21 @@ describe('Gegenprüfung: gerechnet, gezeichnet und Plan müssen zusammenpassen',
     expect(r.befunde.filter(b => b.schwere === 'blocker')).toHaveLength(0);
   });
 
+  it('blockiert, wenn im Plan kein Bauort steht — die Schneelast wäre geraten', () => {
+    const g = geom(9, 30, 4.5, 4.5 + 4.5 * Math.tan(30 * Math.PI / 180));
+    const r = pruefeErgebnis({
+      geometry: g, roofForm: 'satteldach',
+      members: [sparren(erwarteteSparrenlaenge(g, 'satteldach', 0.4)), mauerbank],
+      planNeigung: 30, sparrenSpacing: 0.8, roofOverhang: 0.4,
+      standortIstErsatz: true,
+      standortText: '1010 Wien (Ersatz), Schneezone 2, 171 m',
+    });
+    expect(r.bestanden).toBe(false);
+    const b = r.befunde.find(x => x.id === 'standort.ersatz')!;
+    expect(b.schwere).toBe('blocker');
+    expect(b.bedeutung).toMatch(/Schneelast/);
+  });
+
   it('meldet fehlende Mauerbank', () => {
     const g = geom(9, 30, 4.5, 4.5 + 4.5 * Math.tan(30 * Math.PI / 180));
     const r = pruefeErgebnis({
@@ -101,6 +116,12 @@ describe('Pipeline rechnet bei nicht bestandener Gegenprüfung automatisch neu',
       status: 'yellow', currentStep: 1, documents: [],
       geometry: widerspruch,
       roofType: { form: 'satteldach', confidence: 0.9, alternatives: [], userConfirmed: false },
+      // Echter Bauort — sonst schlägt (zu Recht) der Standort-Blocker an
+      address: {
+        street: 'Musterweg', houseNumber: '1', postalCode: '8230', city: 'Hartberg',
+        state: 'Steiermark', country: 'Österreich', confidence: 0.9,
+        source: 'auto_extracted', alternatives: [],
+      },
       loadCases: [], materials: [], members: [], calculations: [],
       validationIssues: [], auditEntries: [],
     } as unknown as Project;

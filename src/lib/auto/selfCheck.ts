@@ -50,6 +50,10 @@ export interface SelbstpruefungInput {
   planNeigung?: number;
   sparrenSpacing: number;
   roofOverhang: number;
+  /** true, wenn im Plan keine Adresse stand und ein Ersatzstandort verwendet wurde */
+  standortIstErsatz?: boolean;
+  /** Klartext des verwendeten Standorts, für die Meldung */
+  standortText?: string;
 }
 
 const TOL_GRAD = 1.0;      // ° — darunter ist es Rundung, darüber ein Widerspruch
@@ -213,6 +217,22 @@ export function pruefeErgebnis(input: SelbstpruefungInput): SelbstpruefungErgebn
         bedeutung: 'Steher, die im Plan nicht eingezeichnet sind, gehören nicht ins Angebot.',
       });
     }
+  }
+
+  // ── 6b. Ohne Bauort ist die Schneelast geraten ──────────────────────────
+  // Die Schneelast folgt unmittelbar aus Schneezone und Seehöhe. Zwischen dem
+  // Ersatzstandort Wien (Zone 2, 171 m → 1,36 kN/m²) und der Oststeiermark
+  // (Hartberg, Zone 3, 367 m → 2,43 kN/m²) liegen rund 80 %. Wer damit baut,
+  // baut zu schwach. Das ist kein Schönheitsfehler, sondern ein Blocker.
+  if (input.standortIstErsatz) {
+    befunde.push({
+      id: 'standort.ersatz',
+      schwere: 'blocker',
+      titel: 'Kein Bauort im Plan gefunden — Schneelast beruht auf einem Ersatzstandort',
+      erwartet: 'Adresse aus dem Einreichplan (Schneezone und Seehöhe des Bauplatzes)',
+      gefunden: input.standortText ?? 'Ersatzstandort',
+      bedeutung: 'Die Schneelast hängt direkt von Zone und Seehöhe ab — zwischen dem Ersatzstandort und der Oststeiermark liegen rund 80 %. Bitte im Reiter „Adresse" den Bauort eintragen und neu rechnen; vorher ist diese Statik nicht verwendbar.',
+    });
   }
 
   // ── 7. Mauerbank gehört zu jedem klassischen Dachstuhl ──────────────────

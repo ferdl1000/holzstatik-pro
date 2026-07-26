@@ -203,8 +203,31 @@ export function autoComputeLoads(
     }
   }
 
-  const confidence = zonesFromDb ? 0.9 : 0.6;
-  const confidenceLabel = zonesFromDb ? 'hoch (aus PLZ-Datenbank)' : 'mittel (Default-Wert)';
+  // Wenn gar keine Adresse im Plan stand, setzt die Pipeline einen Ersatzstandort
+  // ein (Wien 1010). Der wird in der PLZ-Datenbank natürlich gefunden — und die
+  // Lastfälle sahen deshalb aus, als käme die Zone gesichert aus der Datenbank.
+  // Das ist gefährlich: Wien liegt in Zone 2 auf 171 m, Hartberg in Zone 3 auf
+  // 367 m — das sind 1,36 gegen 2,43 kN/m² Bodenschneelast, also 79 % mehr Last.
+  // Ein Dachstuhl, der mit dem Ersatzstandort gerechnet wurde, ist massiv
+  // unterdimensioniert. Deshalb wird die Unsicherheit hier deutlich benannt.
+  const adresseIstErsatz = (address?.confidence ?? 1) < 0.35;
+  const confidence = adresseIstErsatz ? 0.2 : (zonesFromDb ? 0.9 : 0.6);
+  const confidenceLabel = adresseIstErsatz
+    ? 'UNSICHER — keine Adresse im Plan, Ersatzstandort angenommen'
+    : (zonesFromDb ? 'hoch (aus PLZ-Datenbank)' : 'mittel (Default-Wert)');
+
+  if (adresseIstErsatz) {
+    assumptions.push({
+      field: 'standort.ersatz',
+      value: `${plzEntry?.plz ?? '—'} ${plzEntry?.city ?? state}, Zone ${snowZone}, ${altitude} m`,
+      reason: `ACHTUNG: Im Plan wurde KEINE Adresse gefunden. Gerechnet wird mit einem Ersatzstandort ` +
+        `(${plzEntry?.city ?? state}, Schneezone ${snowZone}, ${altitude} m Seehöhe). Die Schneelast hängt ` +
+        `unmittelbar von Zone und Seehöhe ab — zwischen Wien (Zone 2, 171 m) und der Oststeiermark ` +
+        `(z.B. Hartberg, Zone 3, 367 m) liegen rund 80 % Unterschied. Ohne richtige Adresse ist diese ` +
+        `Statik NICHT verwendbar. Bitte im Reiter „Adresse" den Bauort eintragen und neu rechnen.`,
+      source: 'fallback',
+    });
+  }
 
   // ─── 2. Geometrie ──────────────────────────────────────────────────────────
 

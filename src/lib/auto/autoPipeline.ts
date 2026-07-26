@@ -537,6 +537,8 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     planNeigung,
     sparrenSpacing,
     roofOverhang: roofOverhang ?? 0.4,
+    standortIstErsatz: !project.address,
+    standortText: `${addressForLoads.postalCode} ${addressForLoads.city} (Ersatz), Schneezone ${loadsResult.snowZone ?? '?'}, ${loadsResult.altitude} m`,
   });
 
   // Nicht bestanden UND heilbar UND noch kein zweiter Anlauf → NEU RECHNEN.
