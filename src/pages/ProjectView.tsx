@@ -116,13 +116,32 @@ const ProjectView = () => {
   const updateProject = useCallback(async (updates: Partial<Project>) => {
     const updated = { ...project, ...updates };
     setProject(updated);
-    if (dbProject) {
-      await supabase.from('projects').update({
-        project_data: updated as any,
-        status: updated.status,
-        current_step: updated.currentStep,
-      }).eq('id', dbProject.id);
+    if (!dbProject) return;
+
+    // WICHTIG: Zwischen dem Laden dieser Seite und diesem Schreibvorgang können
+    // die Edge Functions (Orchestrator, Plan-Analyse) Felder in project_data
+    // geschrieben haben, die der lokale Stand noch gar nicht kennt — etwa den
+    // Plankopf oder die aus dem Plan gelesene Bauadresse. Würde der Client
+    // stur seinen eigenen Stand zurückschreiben, wären diese Felder wieder weg
+    // (genau das ist passiert: die Bauadresse aus dem Schriftfeld verschwand
+    // beim nächsten Speichern). Deshalb wird der Serverstand frisch gelesen und
+    // NUR mit den tatsächlich gesetzten lokalen Werten überschrieben.
+    const { data: aktuell } = await supabase
+      .from('projects').select('project_data').eq('id', dbProject.id).single();
+    const serverStand = (aktuell?.project_data as Record<string, unknown>) ?? {};
+
+    const lokalGesetzt: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(updated as Record<string, unknown>)) {
+      if (v !== undefined) lokalGesetzt[k] = v;
     }
+    const merged = { ...serverStand, ...lokalGesetzt } as Project;
+    setProject(merged);
+
+    await supabase.from('projects').update({
+      project_data: merged as any,
+      status: merged.status,
+      current_step: merged.currentStep,
+    }).eq('id', dbProject.id);
   }, [project, dbProject]);
 
   // Standard-Ansicht: Ergebnis-Übersicht sobald ein Rechenergebnis existiert,
