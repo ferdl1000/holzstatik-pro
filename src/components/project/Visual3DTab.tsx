@@ -72,6 +72,7 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
         // Auflagerbreite der Pfette aus der echten Bauteilliste: sie bestimmt
         // Länge und damit Tiefe der Kerve.
         pfettenBreite: (project.members ?? []).find(m => m.type === 'pfette')?.width ?? 120,
+        pfettenHoehe: (project.members ?? []).find(m => m.type === 'pfette')?.height ?? 100,
       }} />
       <div className="mt-4">
         <SchnittViews

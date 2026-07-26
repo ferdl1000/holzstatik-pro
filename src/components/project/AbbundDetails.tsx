@@ -25,6 +25,8 @@ export interface AbbundGeom {
   isPultdach?: boolean;
   /** Auflagerbreite der Pfette [mm] — bestimmt Länge und Tiefe der Kerve */
   pfettenBreite?: number;
+  /** Höhe der Pfette [mm] — für die Darstellung des Auflagers in der Einbaulage */
+  pfettenHoehe?: number;
 }
 export interface AbbundDetailsProps {
   member: TimberMember;
@@ -94,126 +96,157 @@ function WoodPattern({ id }: { id: string }) {
 
 // ─── SPARREN-Detail ────────────────────────────────────────────────────────────
 function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; roofPitchDeg: number; geom?: AbbundGeom }) {
-  const b = member.width;     // mm
-  const h = member.height;    // mm
-  const lengthMM = (member.length || 4) * 1000; // mm
+  const b = member.width;                        // mm
+  const h = member.height;                       // mm (senkrecht zur Sparrenachse)
+  const lengthMM = (member.length || 4) * 1000;  // mm entlang der Schräge
   const alpha = roofPitchDeg;
-  const klaueTiefe = Math.min(30, h / 3);
-  const klaueBreite = 120; // typische Fußpfetten-Breite
-  // Überstand aus der ECHTEN Projektgeometrie (Plan/Default), entlang der Schräge gemessen
-  const cosAReal = Math.max(Math.cos((alpha * Math.PI) / 180), 0.5);
-  const ueberstand = Math.round(((geom?.overhang ?? 0.3) * 1000) / cosAReal); // mm entlang Schräge
+  const aRad = (alpha * Math.PI) / 180;
+  const cosA = Math.max(Math.cos(aRad), 0.2);
+  const tanA = Math.tan(aRad);
 
-  // Maßstab: lengthMM auf ca 600px
-  const scale = 600 / lengthMM;
-  const drawLen = lengthMM * scale;
-  const drawH = h * scale * 3; // Höhe 3-fach übertrieben damit erkennbar
-  const startX = 100;
-  const startY = 200;
+  // ── GEZEICHNET WIRD IN DER EINBAULAGE, NICHT FLACH LIEGEND ────────────────
+  // Der Auftraggeber: "bitte immer in den Graden zeichnen und an den richtigen
+  // Positionen anzeigen, wo es wirklich liegt". Der Sparren steht deshalb unter
+  // seiner echten Neigung, und Mauerbank bzw. Mittelpfette sind dort gezeichnet,
+  // wo sie tatsächlich unter ihm liegen. Damit ist auf einen Blick zu sehen, was
+  // auf was aufliegt — vorher war nur ein flacher Balken mit zwei Kerben zu
+  // sehen und das Auflager schien über dem Sparren zu schweben.
+  const hV = h / cosA;                           // lotrechte Sparrendicke
+  const ueberstand = Math.round(((geom?.overhang ?? 0.3) * 1000) / cosA); // mm entlang Schräge
 
-  // ZIMMERER-DARSTELLUNG (Sparren flach liegend, wie beim Anreißen):
-  // Der Balken hat DURCHGEHEND die gleiche Höhe. First liegt RECHTS. Alle
-  // lotrechten Anrisse (Firstschnitt, Zierschnitt, Kerven-Stoß) sind PARALLEL
-  // und neigen sich oben BERGWÄRTS (nach rechts) — am First erreicht die
-  // OBERKANTE den Firstpunkt, die Unterkante endet um h·tanα früher.
-  const tanA = Math.max(Math.tan((alpha * Math.PI) / 180), 0.09);
-  const slant = drawH * tanA;                    // Schmiegen-Versatz über die Balkenhöhe
+  const pfB = geom?.pfettenBreite ?? 120;        // Auflagerbreite der Pfette [mm]
+  const pfH = geom?.pfettenHoehe ?? 100;         // Höhe der Pfette [mm]
+  const mauerH = 250;                            // Mauerkrone (bauseits) [mm]
 
-  // ── KERVE: Tiefe folgt aus der Auflagerbreite der Pfette, nicht umgekehrt ──
-  // Die Kervensohle ist waagrecht und genau so lang, wie die Pfette breit ist —
-  // sie sitzt ja auf der Pfette. Daraus folgt die Tiefe: t = Auflagerbreite · tan α.
-  // Vorher war es andersherum (t fix 40 mm, Sohle = t/tan α). Bei flachen Dächern
-  // ergab das Unsinn: bei 5° lief die Sohle über 457 mm aus — bei einer 120 mm
-  // breiten Pfette. Die beiden Kerven fraßen dadurch das linke Drittel des
-  // Sparrens auf und er sah aus, als würde er auslaufen.
-  const tanReal = Math.tan((alpha * Math.PI) / 180);
-  const pfettenBreiteMM = geom?.pfettenBreite ?? 120;
-  const kerveTiefeMM = Math.min(h / 4, 40, pfettenBreiteMM * tanReal);
-  // Unter ~2° schneidet der Zimmerer keine Kerve mehr — der Sparren liegt flach
-  // auf und wird nur verankert.
+  // Kerve: die Sohle ist so lang wie die Pfette breit ist, daraus folgt die
+  // Tiefe t = Auflagerbreite · tan α (gedeckelt bei h/4). Unter 2° wird keine
+  // Kerve mehr geschnitten — der Sparren liegt flach auf und wird verankert.
+  const kerveTiefeMM = Math.min(h / 4, 40, pfB * tanA);
   const kerveNoetig = alpha >= 2 && kerveTiefeMM >= 5;
-  const tPix = kerveTiefeMM * scale * 3;         // gleiche Überhöhung wie drawH
-  const slantT = tPix * tanA;                    // Stoß-Versatz über die Kerventiefe
-  const sohleLen = pfettenBreiteMM * scale;      // Sohle = Auflagerbreite der Pfette
-  const yT = startY, yB = startY + drawH;
 
-  // Kervenpositionen (Stoß-Fußpunkt) entlang der Unterkante aus der ECHTEN
-  // Geometrie: Fußpfette nach dem Überstand; Mittelpfette auf halber
-  // Sparren-Stützweite. Beim SATTELDACH spannt der Sparren über die halbe
-  // Gebäudebreite (Mittelpfette also bei B/4), beim PULTDACH über die volle
-  // (Mittelpfette bei B/2). Vorher wurde immer B/4 gerechnet — beim Pultdach
-  // saß die Kerve dadurch bei 28 % statt bei 50 % der Sparrenlänge.
-  const xFuss = startX + ueberstand * scale;
-  const hatMittelpfette = geom?.hasMittelpfette ?? false;
-  const spannweiteMM = (geom?.buildingWidth ?? 8) * 1000 * (geom?.isPultdach ? 1 : 0.5);
-  const mitteSlopeMM = (spannweiteMM / 2) / cosAReal;
-  const xMitte = Math.min(
-    startX + (ueberstand + mitteSlopeMM) * scale,
-    startX + drawLen - slant - slantT - sohleLen - 10,
+  // Weltmaße (mm): x waagrecht, y nach oben; fürs SVG unten gespiegelt.
+  const spanX = lengthMM * cosA;                 // waagrechte Erstreckung
+  const spanY = lengthMM * Math.sin(aRad) + hV + pfH + mauerH;
+
+  const pad = { l: 70, r: 80, t: 90, b: 60 };
+  const s = Math.min(
+    (SVG_W - pad.l - pad.r) / Math.max(spanX, 1),
+    (SVG_H - pad.t - pad.b) / Math.max(spanY, 1),
   );
-  // Kerve im Anriss (Traversal der Unterkante von rechts nach links, x fällt monoton):
-  // Sohlen-Auslauf (bergwärts) → waagrechte Sohle auf Pfetten-OK → lotrechter
-  // Stoß runter auf die Unterkante; der Lotstoß steht TALSEITIG an der
-  // Pfettenflanke und nimmt den Hangabtrieb auf (wie Roof3D sparrenProfil).
-  const kerbe = (xStoss: number) =>
-    `${xStoss + slantT + sohleLen},${yB} ${xStoss + slantT},${yB - tPix} ${xStoss},${yB}`;
+  const x0 = pad.l;
+  const y0 = SVG_H - pad.b - (pfH + mauerH) * s; // Höhe der Sparren-Oberkante am Traufende
+  const X = (mmX: number) => x0 + mmX * s;
+  const Y = (mmY: number) => y0 - mmY * s;       // mmY nach OBEN positiv
+
+  const yOK = (mmX: number) => mmX * tanA;       // Oberkante steigt zum First
+  const yUK = (mmX: number) => yOK(mmX) - hV;    // Unterkante, lotrecht darunter
+
+  // Auflagerpositionen (waagrecht ab Sparrenende): Fußpfette nach dem Überstand,
+  // Mittelpfette auf halber Stützweite. Beim PULTDACH spannt der Sparren über
+  // die volle Gebäudebreite, beim Satteldach über die halbe.
+  const spannweiteMM = (geom?.buildingWidth ?? 8) * 1000 * (geom?.isPultdach ? 1 : 0.5);
+  const xFussMM = ueberstand * cosA;
+  const xMitteMM = Math.min(xFussMM + spannweiteMM / 2, spanX - pfB - 40);
+  const hatMittelpfette = (geom?.hasMittelpfette ?? false) && xMitteMM > xFussMM + pfB;
+
+  /** Auflager: waagrechte Kervensohle auf Oberkante Pfette. */
+  const auflager = (xLinksMM: number) => ({
+    xL: xLinksMM,
+    xR: xLinksMM + pfB,
+    ySohle: yUK(xLinksMM + pfB),                 // bergseitige Kante: dort Tiefe null
+  });
+  const aFuss = auflager(xFussMM);
+  const aMitte = auflager(xMitteMM);
+
+  // Umriss: Oberkante hinauf → lotrechter Firstschnitt → Unterkante zurück mit
+  // den Kerven (von oben nach unten) → lotrechter Zierschnitt am Traufende.
+  const pts: string[] = [];
+  const P = (mmX: number, mmY: number) => pts.push(`${X(mmX)},${Y(mmY)}`);
+  P(0, yOK(0));
+  P(spanX, yOK(spanX));
+  P(spanX, yUK(spanX));
+  if (kerveNoetig && hatMittelpfette) {
+    P(aMitte.xR, yUK(aMitte.xR));
+    P(aMitte.xR, aMitte.ySohle);
+    P(aMitte.xL, aMitte.ySohle);
+    P(aMitte.xL, yUK(aMitte.xL));
+  }
+  if (kerveNoetig) {
+    P(aFuss.xR, yUK(aFuss.xR));
+    P(aFuss.xR, aFuss.ySohle);
+    P(aFuss.xL, aFuss.ySohle);
+    P(aFuss.xL, yUK(aFuss.xL));
+  }
+  P(0, yUK(0));
+
+  const Auflagerbild = ({ a, mitMauer, label }: { a: { xL: number; xR: number; ySohle: number }; mitMauer: boolean; label: string }) => (
+    <g>
+      {mitMauer && (
+        <>
+          <rect
+            x={X(a.xL) - 10} y={Y(a.ySohle - pfH)}
+            width={pfB * s + 20} height={mauerH * s}
+            fill="#d4d4d8" stroke="#71717a" strokeWidth={1.2}
+          />
+          <text x={X(a.xR) + 14} y={Y(a.ySohle - pfH) + mauerH * s * 0.65}
+                fontSize={9} fill="#52525b">Mauerkrone (bauseits)</text>
+        </>
+      )}
+      <rect x={X(a.xL)} y={Y(a.ySohle)} width={pfB * s} height={pfH * s}
+            fill="url(#wood-sp)" stroke="#333" strokeWidth={1.3} />
+      {/* Beschriftung auf einer gemeinsamen Grundlinie unter der Zeichnung,
+          mit dünner Hinweislinie — sonst überlagern sich Auflager-, Mauerkronen-
+          und Überstandsbeschriftung im Traufbereich. */}
+      <line x1={X(a.xL) + (pfB * s) / 2} y1={Y(a.ySohle) + pfH * s}
+            x2={X(a.xL) + (pfB * s) / 2} y2={SVG_H - 34}
+            stroke="#94a3b8" strokeWidth={0.7} strokeDasharray="2,2" />
+      <text x={X(a.xL) + (pfB * s) / 2} y={SVG_H - 24}
+            fontSize={10} fill="#0891b2" textAnchor="middle">{label}</text>
+    </g>
+  );
 
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="w-full border bg-white">
       <WoodPattern id="wood-sp" />
-      <text x={SVG_W / 2} y={28} textAnchor="middle" fontSize={16} fontWeight="bold" fill="#1e293b">
+      <text x={SVG_W / 2} y={22} textAnchor="middle" fontSize={15} fontWeight="bold" fill="#1e293b">
         Sparren – {member.name} ({b}/{h} mm, L = {(lengthMM / 1000).toFixed(2)} m, α = {alpha}°)
       </text>
+      <text x={SVG_W / 2} y={38} textAnchor="middle" fontSize={10} fill="#64748b">
+        Einbaulage: Sparren in der echten Neigung, Auflager an ihrer wirklichen Position
+      </text>
+      <text x={SVG_W / 2} y={53} textAnchor="middle" fontSize={10} fill="#dc2626">
+        Traufe: Zierschnitt lotrecht mit Fase · First: lotrechter Schnitt
+      </text>
 
-      {/* Sparrenkörper: konstante Höhe, parallele Schmiegen, Kerven unten */}
-      <polygon
-        points={
-          `${startX + slant},${yT} ` +                           // oben links (Zierschnitt-Kopf)
-          `${startX + drawLen},${yT} ` +                         // oben rechts = FIRSTPUNKT (Oberkante erreicht den First)
-          `${startX + drawLen - slant},${yB} ` +                 // unten rechts (Firstschnitt-Fuß, um h·tanα zurück)
-          (hatMittelpfette && kerveNoetig ? `${kerbe(xMitte)} ` : '') +  // Kerve Mittelpfette (nur wenn statisch vorhanden)
-          (kerveNoetig ? `${kerbe(xFuss)} ` : '') +              // Kerve Fußpfette (Mauerbank)
-          `${startX},${yB}`                                      // unten links (Zierschnitt-Fuß, Unterkante ragt talwärts vor)
-        }
-        fill="url(#wood-sp)"
-        stroke="#333"
-        strokeWidth={1.5}
-      />
+      {/* Auflager zuerst — der Sparren liegt sichtbar DARAUF */}
+      <Auflagerbild a={aFuss} mitMauer label={`Mauerbank ${pfB}/${pfH}`} />
+      {hatMittelpfette && <Auflagerbild a={aMitte} mitMauer={false} label={`Mittelpfette ${pfB}/${pfH}`} />}
 
-      {/* Schnitte beschriften (kollisionsfrei: oben links/rechts, Kerven unten) */}
-      <text x={startX + drawLen} y={yT - 8} fontSize={11} fill="#dc2626" textAnchor="end">Firstschnitt (Schmiege α={alpha}°)</text>
-      <text x={startX + slant + 4} y={yT - 8} fontSize={11} fill="#dc2626">Zierschnitt Traufe</text>
-      {kerveNoetig ? (
-        <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-          Kerve Fußpfette t = {Math.round(kerveTiefeMM)} mm (Sohle {pfettenBreiteMM} mm)
-        </text>
-      ) : (
-        <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-          Auflager Fußpfette — bei {alpha}° keine Kerve, Sparren liegt flach auf und wird verankert
-        </text>
-      )}
-      {hatMittelpfette && kerveNoetig && (
-        <text x={xMitte} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-          Kerve Mittelpfette t = {Math.round(kerveTiefeMM)} mm
-        </text>
-      )}
+      <polygon points={pts.join(' ')} fill="url(#wood-sp)" stroke="#333" strokeWidth={1.6} />
 
-      {/* Bemaßung: Gesamtlänge (Schräglänge) */}
-      <Dim x1={startX} y1={startY - 50} x2={startX + drawLen} y2={startY - 50}
+      {/* Schnitte benennen */}
+      <text x={X(aFuss.xL)} y={Y(yOK(aFuss.xL)) - 26} fontSize={10} fill="#0891b2">
+        {kerveNoetig
+          ? `Kerve t = ${Math.round(kerveTiefeMM)} mm, Sohle ${pfB} mm`
+          : `bei ${alpha}° keine Kerve — Sparren liegt auf, Sturmanker`}
+      </text>
+
+      {/* Bemaßung */}
+      <Dim x1={X(0)} y1={Y(yOK(0)) - 52} x2={X(spanX)} y2={Y(yOK(spanX)) - 52}
            label={`Schräglänge ${fmt(lengthMM)}`} side="top" />
-      {/* Bemaßung: Sparrenhöhe rechts (unterhalb des Firstschnitt-Labels) */}
-      <Dim x1={startX + drawLen + 35} y1={yT} x2={startX + drawLen + 35} y2={yB}
+      {/* Überstand ÜBER dem Sparren bemaßen — unten drängen sich sonst
+          Auflager- und Mauerkronenbeschriftung. */}
+      <Dim x1={X(0)} y1={Y(yOK(0)) - 14} x2={X(xFussMM)} y2={Y(yOK(xFussMM)) - 14}
+           label={`Überstand ${ueberstand} mm`} side="top" />
+      <Dim x1={X(spanX) + 26} y1={Y(yOK(spanX))} x2={X(spanX) + 26} y2={Y(yUK(spanX))}
            label={`h = ${h} mm`} side="right" />
-      {/* Bemaßung: Überstand bis zur Fußpfetten-Kerve */}
-      <Dim x1={startX} y1={yB + 50} x2={xFuss}
-           y2={yB + 50} label={`Überstand ${ueberstand} mm`} side="bottom" />
 
-      {/* Querschnitt-Skizze rechts oben */}
-      <g transform={`translate(${SVG_W - 120}, 42)`}>
-        <text x={50} y={-5} fontSize={11} fontWeight="bold" textAnchor="middle">Querschnitt</text>
-        <rect x={0} y={0} width={50} height={80} fill="url(#wood-sp)" stroke="#333" strokeWidth={1.2} />
-        <text x={25} y={95} fontSize={10} textAnchor="middle">{b} mm</text>
-        <text x={-10} y={45} fontSize={10} textAnchor="end">{h} mm</text>
+      {/* Querschnitt-Skizze */}
+      <g transform={`translate(${SVG_W - 100}, 58)`}>
+        <text x={30} y={-6} fontSize={10} fontWeight="bold" textAnchor="middle">Querschnitt</text>
+        <rect x={0} y={0} width={34} height={54} fill="url(#wood-sp)" stroke="#333" strokeWidth={1.2} />
+        <text x={17} y={68} fontSize={9} textAnchor="middle">{b} mm</text>
+        <text x={-6} y={30} fontSize={9} textAnchor="end">{h} mm</text>
       </g>
     </svg>
   );
@@ -670,6 +703,8 @@ export function AbbundOverview({ members, roofPitchDeg, geom }: AbbundOverviewPr
     isPultdach: geom?.isPultdach ?? false,
     pfettenBreite: geom?.pfettenBreite
       ?? (tragpfette?.width ?? mauerbank?.width ?? 120),
+    pfettenHoehe: geom?.pfettenHoehe
+      ?? (mauerbank?.height ?? tragpfette?.height ?? 100),
   };
 
   const grouped: { key: string; label: string; member: TimberMember }[] = [];
