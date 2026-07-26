@@ -54,6 +54,13 @@ export interface SelbstpruefungInput {
   standortIstErsatz?: boolean;
   /** Klartext des verwendeten Standorts, für die Meldung */
   standortText?: string;
+  /** Dachform des Gesamtprojekts (project.roofType.form) */
+  projektDachform?: string;
+  /** Erkannte Dachteile — jeder mit eigener Form und Geometrie */
+  dachteile?: {
+    id: string; label: string; kind: string; form: string;
+    geometry: { length: number; width: number; pitch: number; eavesHeight: number; ridgeHeight: number };
+  }[];
 }
 
 const TOL_GRAD = 1.0;      // ° — darunter ist es Rundung, darüber ein Widerspruch
@@ -233,6 +240,76 @@ export function pruefeErgebnis(input: SelbstpruefungInput): SelbstpruefungErgebn
       gefunden: input.standortText ?? 'Ersatzstandort',
       bedeutung: 'Die Schneelast hängt direkt von Zone und Seehöhe ab — zwischen dem Ersatzstandort und der Oststeiermark liegen rund 80 %. Bitte im Reiter „Adresse" den Bauort eintragen und neu rechnen; vorher ist diese Statik nicht verwendbar.',
     });
+  }
+
+  // ── 6c. Die Dachteile müssen zum Projekt und zu sich selbst passen ──────
+  // Ein Plan ist erst dann verstanden, wenn Dachform, Neigung und Maße an
+  // JEDER Stelle dasselbe sagen. Sonst steht auf der Ergebnisseite "Satteldach",
+  // im Dachteil "Flachdach" und im Namen "Pultdach" — und die Statik rechnet
+  // mit dem, was gerade zufällig gewinnt.
+  const teile = input.dachteile ?? [];
+  const hauptteil = teile.find(t => t.kind === 'main') ?? teile[0];
+
+  if (hauptteil && input.projektDachform && hauptteil.form !== input.projektDachform) {
+    befunde.push({
+      id: 'dachform.widerspruch',
+      schwere: 'blocker',
+      titel: 'Dachform des Projekts und des Hauptdachs widersprechen sich',
+      erwartet: `einheitlich (Projekt sagt "${input.projektDachform}")`,
+      gefunden: `Hauptdach "${hauptteil.label}" ist als "${hauptteil.form}" geführt`,
+      bedeutung: 'Sparrenlänge, Lastansatz und Zeichnung hängen an der Dachform. Solange zwei verschiedene Formen im Projekt stehen, rechnet die Statik nicht das, was der Plan zeigt.',
+    });
+  }
+
+  for (const t of teile) {
+    const b = t.form === 'pultdach' ? t.geometry.width : t.geometry.width / 2;
+    const rise = t.geometry.ridgeHeight - t.geometry.eavesHeight;
+
+    // Flachdach mit spürbarer Neigung ist ein Pultdach — und wird anders gerechnet
+    if (t.form === 'flachdach' && t.geometry.pitch >= 3) {
+      befunde.push({
+        id: `dachteil.${t.id}.form`,
+        schwere: 'blocker',
+        titel: `„${t.label}" ist als Flachdach geführt, hat aber ${t.geometry.pitch}° Neigung`,
+        erwartet: 'Flachdach unter 3° — darüber ist es ein Pultdach',
+        gefunden: `${t.geometry.pitch}° bei Form "flachdach"`,
+        bedeutung: 'Beim Flachdach spannt der Sparren anders und der Schnee bleibt voll liegen. Die falsche Form verfälscht Sparrenlänge, Schneelast und Zeichnung gleichzeitig.',
+      });
+    }
+
+    // Neigung des Teils gegen seine eigenen Höhen
+    if (b > 0 && t.form !== 'flachdach') {
+      const implizit = grad(Math.atan2(rise, b));
+      if (Math.abs(implizit - t.geometry.pitch) > 2) {
+        befunde.push({
+          id: `dachteil.${t.id}.neigung`,
+          schwere: 'blocker',
+          titel: `„${t.label}": Neigung passt nicht zu First- und Traufhöhe`,
+          erwartet: `${t.geometry.pitch}°`,
+          gefunden: `${implizit.toFixed(1)}° aus First ${t.geometry.ridgeHeight} m, Traufe ${t.geometry.eavesHeight} m und ${t.form === 'pultdach' ? 'voller' : 'halber'} Breite ${t.geometry.width} m`,
+          bedeutung: 'Auch hier gilt: die Zeichnung folgt den Höhen, die Statik der Neigung. Klaffen sie auseinander, ist beides nicht zu gebrauchen.',
+        });
+      }
+    }
+  }
+
+  // Hauptdach muss das Gebäude auch wirklich abdecken
+  if (hauptteil) {
+    const gebFlaeche = geometry.length.value * geometry.width.value;
+    const teilFlaeche = hauptteil.geometry.length * hauptteil.geometry.width;
+    if (gebFlaeche > 0 && teilFlaeche > 0) {
+      const verhaeltnis = teilFlaeche / gebFlaeche;
+      if (verhaeltnis < 0.8 || verhaeltnis > 1.25) {
+        befunde.push({
+          id: 'dachteil.grundflaeche',
+          schwere: 'blocker',
+          titel: 'Hauptdach deckt das Gebäude nicht ab',
+          erwartet: `rund ${gebFlaeche.toFixed(0)} m² (Gebäude ${geometry.length.value} × ${geometry.width.value} m)`,
+          gefunden: `${teilFlaeche.toFixed(0)} m² (Dachteil ${hauptteil.geometry.length} × ${hauptteil.geometry.width} m)`,
+          bedeutung: 'Holzmenge und Angebotssumme richten sich nach der Dachfläche. Ist der Dachteil kleiner als das Gebäude, ist das Angebot entsprechend zu billig — und umgekehrt.',
+        });
+      }
+    }
   }
 
   // ── 7. Mauerbank gehört zu jedem klassischen Dachstuhl ──────────────────

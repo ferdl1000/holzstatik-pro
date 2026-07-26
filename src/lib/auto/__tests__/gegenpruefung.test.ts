@@ -96,6 +96,44 @@ describe('Gegenprüfung: gerechnet, gezeichnet und Plan müssen zusammenpassen',
     expect(b.bedeutung).toMatch(/Schneelast/);
   });
 
+  it('deckt die drei Widersprüche auf, die der echte Nöhrer-Plan geliefert hat', () => {
+    // Projekt sagt Satteldach, der Dachteil ist als Flachdach geführt, heißt
+    // aber "Halle Pultdach" und hat 5° Neigung — und er ist viel kleiner als
+    // das Gebäude. Genau so kam es aus der Plananalyse heraus.
+    const g = geom(9.75, 5, 3.26, 3.26 + 4.875 * Math.tan(5 * Math.PI / 180), 18.75);
+    const r = pruefeErgebnis({
+      geometry: g, roofForm: 'satteldach',
+      members: [sparren(erwarteteSparrenlaenge(g, 'satteldach', 0.4)), mauerbank],
+      sparrenSpacing: 0.8, roofOverhang: 0.4,
+      projektDachform: 'satteldach',
+      dachteile: [{
+        id: 'main', label: 'Halle Pultdach', kind: 'main', form: 'flachdach',
+        geometry: { length: 7.5, width: 6.7, pitch: 5, eavesHeight: 3.26, ridgeHeight: 3.83 },
+      }],
+    });
+
+    expect(r.bestanden).toBe(false);
+    const ids = r.befunde.filter(b => b.schwere === 'blocker').map(b => b.id);
+    expect(ids).toContain('dachform.widerspruch');      // Satteldach vs. Flachdach
+    expect(ids).toContain('dachteil.main.form');        // Flachdach mit 5° Neigung
+    expect(ids).toContain('dachteil.grundflaeche');     // 50 m² Dach auf 183 m² Gebäude
+  });
+
+  it('lässt einen stimmigen Dachteil durch', () => {
+    const g = geom(9, 30, 4.5, 4.5 + 4.5 * Math.tan(30 * Math.PI / 180), 12);
+    const r = pruefeErgebnis({
+      geometry: g, roofForm: 'satteldach',
+      members: [sparren(erwarteteSparrenlaenge(g, 'satteldach', 0.4)), mauerbank],
+      planNeigung: 30, sparrenSpacing: 0.8, roofOverhang: 0.4,
+      projektDachform: 'satteldach',
+      dachteile: [{
+        id: 'main', label: 'Hauptdach', kind: 'main', form: 'satteldach',
+        geometry: { length: 12, width: 9, pitch: 30, eavesHeight: 4.5, ridgeHeight: 4.5 + 4.5 * Math.tan(30 * Math.PI / 180) },
+      }],
+    });
+    expect(r.bestanden).toBe(true);
+  });
+
   it('meldet fehlende Mauerbank', () => {
     const g = geom(9, 30, 4.5, 4.5 + 4.5 * Math.tan(30 * Math.PI / 180));
     const r = pruefeErgebnis({

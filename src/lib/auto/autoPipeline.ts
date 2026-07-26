@@ -539,6 +539,14 @@ export async function runAutoPipeline(input: AutoPipelineInput): Promise<AutoPip
     roofOverhang: roofOverhang ?? 0.4,
     standortIstErsatz: !project.address,
     standortText: `${addressForLoads.postalCode} ${addressForLoads.city} (Ersatz), Schneezone ${loadsResult.snowZone ?? '?'}, ${loadsResult.altitude} m`,
+    projektDachform: roofTypeRaw.form,
+    dachteile: (finalRoofParts ?? []).map(rp => ({
+      id: rp.id, label: rp.label, kind: rp.kind, form: rp.form,
+      geometry: {
+        length: rp.geometry.length, width: rp.geometry.width, pitch: rp.geometry.pitch,
+        eavesHeight: rp.geometry.eavesHeight, ridgeHeight: rp.geometry.ridgeHeight,
+      },
+    })),
   });
 
   // Nicht bestanden UND heilbar UND noch kein zweiter Anlauf → NEU RECHNEN.
