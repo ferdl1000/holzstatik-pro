@@ -25,6 +25,7 @@ import { AutoAnalysisTab } from '@/components/project/AutoAnalysisTab';
 import { BillOfMaterialsTab } from '@/components/project/BillOfMaterialsTab';
 import { BauphysikTab } from '@/components/project/BauphysikTab';
 import { WerkstattTab } from '@/components/project/WerkstattTab';
+import { SaegewerkTab } from '@/components/project/SaegewerkTab';
 import { supabase } from '@/integrations/supabase/client';
 import { EMPTY_PROJECT } from '@/data/mockProject';
 import type { Project } from '@/types/project';
@@ -47,6 +48,7 @@ const TAB_CONFIG = [
   { key: 'visual3d', label: '3D-Modell', icon: Boxes },
   { key: 'costs', label: 'Kosten', icon: Euro },
   { key: 'werkstatt', label: 'Werkstatt', icon: Wrench },
+  { key: 'saegewerk', label: 'Sägewerk', icon: TreePine },
   { key: 'review', label: 'PrÃ¼fung', icon: CheckCircle },
   { key: 'report', label: 'Bericht', icon: FileOutput },
 ];
@@ -125,7 +127,14 @@ const ProjectView = () => {
 
   // Standard-Ansicht: Ergebnis-Übersicht sobald ein Rechenergebnis existiert,
   // sonst der Plan-Upload (neues/leeres Projekt).
-  const activeTab = requestedTab || ((project.members?.length ?? 0) > 0 ? 'ergebnis' : 'plan');
+  // Ein unbekannter ?tab=-Wert (vertippt, alter Link, Lesezeichen aus einer
+  // früheren Version) darf NICHT zu einer weißen Seite führen — dann steht der
+  // Nutzer vor einem leeren Fenster und kommt nicht weiter. In dem Fall wird
+  // der Standardreiter gezeigt.
+  const standardTab = (project.members?.length ?? 0) > 0 ? 'ergebnis' : 'plan';
+  const activeTab = requestedTab && TAB_CONFIG.some(t => t.key === requestedTab)
+    ? requestedTab
+    : standardTab;
 
   // Live validation counts for blocker banner
   const blockerCount = useMemo(() => {
@@ -234,6 +243,7 @@ const ProjectView = () => {
             <TabsContent value="visual3d" className="m-0 h-full p-4"><Visual3DTab project={project} /></TabsContent>
             <TabsContent value="costs" className="m-0 h-full p-4"><CostsTab project={project} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="werkstatt" className="m-0 h-full p-4"><WerkstattTab project={project} /></TabsContent>
+            <TabsContent value="saegewerk" className="m-0 h-full overflow-auto"><SaegewerkTab project={project} /></TabsContent>
             <TabsContent value="review" className="m-0 h-full"><ReviewTab project={project} projectId={dbProject?.id} onUpdate={updateProject} /></TabsContent>
             <TabsContent value="report" className="m-0 h-full"><ReportTab project={project} projectId={dbProject?.id} /></TabsContent>
           </div>
