@@ -50,7 +50,7 @@ describe('supportSpacing — konfigurierbarer Stützenabstand (autoMembers)', ()
 });
 
 describe('supportSpacing — reduziert die statische Pfettenstützweite (autoCalculate)', () => {
-  it('kleinerer Stützenabstand → kürzere Pfettenstützweite → geringere Ausnutzung möglich', async () => {
+  it('kleinerer Stützenabstand → kürzere Pfettenstützweite → schwächerer Querschnitt reicht', async () => {
     const { members } = autoGenerateMembers(geometry, roofType, pfettendach(4.0));
     const loads = { gk: 0.6, sk: 1.8 };
 
@@ -65,7 +65,11 @@ describe('supportSpacing — reduziert die statische Pfettenstützweite (autoCal
     const narrowPfette = narrowResult.members.find(istTragendePfette);
     expect(widePfette).toBeDefined();
     expect(narrowPfette).toBeDefined();
-    // Kürzere Stützweite → geringeres Biegemoment → geringere max. Ausnutzung
-    expect(narrowPfette!.maxUtilization).toBeLessThan(widePfette!.maxUtilization);
+    // Kürzere Stützweite → geringeres Biegemoment → es reicht ein schwächerer
+    // Querschnitt. (Die Ausnutzung selbst bleibt hoch, weil der Optimierer das
+    // Profil bis knapp unter die Grenze verkleinert — verglichen wird deshalb
+    // das Widerstandsmoment, nicht η.)
+    const wy = (s: { b: number; h: number }) => s.b * s.h * s.h / 6;
+    expect(wy(narrowPfette!.section)).toBeLessThan(wy(widePfette!.section));
   });
 });

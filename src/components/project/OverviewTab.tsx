@@ -3,7 +3,7 @@ import type { Project } from '@/types/project';
 import { SectionCard } from '@/components/shared/SectionCard';
 import { Button } from '@/components/ui/button';
 import { Euro, Boxes, CheckCircle, AlertTriangle, XCircle, Home, ArrowRight, FileOutput, Weight, Ruler, TreePine } from 'lucide-react';
-import { estimateCost, DEFAULT_FACTORS } from '@/lib/pricing';
+import { autoComputeCosts } from '@/lib/auto/autoCost';
 import { roofAreaWithOverhang, DEFAULT_ROOF_OVERHANG } from '@/lib/calc/roofArea';
 import { RecalculateAllButton } from './RecalculateAllButton';
 import { Visual3DTab } from './Visual3DTab';
@@ -40,17 +40,26 @@ export function OverviewTab({ project, onUpdate, onNavigate }: OverviewTabProps)
     return roofAreaWithOverhang(project.geometry.length.value, project.geometry.width.value, project.geometry.roofPitch.value, overhang);
   }, [roofParts, project.geometry, overhang]);
 
-  const groundArea = project.geometry ? project.geometry.length.value * project.geometry.width.value : 0;
 
+  // WICHTIG: exakt dieselbe Kalkulation wie im Kosten-Reiter und im Angebot.
+  // Vorher rechnete die Übersicht mit estimateCost() eine EIGENE Summe inklusive
+  // Eindeckung, Dämmung und Folien — der Kosten-Reiter dagegen nur die
+  // Zimmererleistung. Für dasselbe Projekt standen damit zwei verschiedene
+  // Angebotssummen in der App.
   const estimate = useMemo(() => {
-    if (!hasResult) return null;
-    return estimateCost({
-      members, roofArea: Math.round(totalRoofArea * 10) / 10, groundArea,
-      coveringId: 'tile_clay', insulationId: 'ins_mw_200', membraneIds: ['mem_under', 'mem_vapor'],
-      hasGlulam: members.some((m) => (m.material || '').toLowerCase().includes('gl')),
-      factors: DEFAULT_FACTORS,
+    if (!hasResult || !project.geometry) return null;
+    // Gespeichertes Ergebnis des letzten Laufs hat Vorrang (überlebt Reload).
+    if (project.autoRun?.kosten) {
+      return { net: project.autoRun.kosten.net, gross: project.autoRun.kosten.gross };
+    }
+    const cost = autoComputeCosts(members, project.geometry, {
+      roofForm: project.roofType?.form ?? 'satteldach',
+      roofOverhang: overhang,
+      ...(roofParts.length > 0 ? { roofParts } : {}),
+      ...(project.coveringType ? { coveringType: project.coveringType } : {}),
     });
-  }, [hasResult, members, totalRoofArea, groundArea]);
+    return { net: cost.withLabor.net, gross: cost.withLabor.gross };
+  }, [hasResult, members, project.geometry, project.roofType, project.coveringType, project.autoRun, overhang, roofParts]);
 
   const timberVolume = members.reduce((s, m) => s + (m.width / 1000) * (m.height / 1000) * m.length * m.quantity, 0);
   const statusCounts = {

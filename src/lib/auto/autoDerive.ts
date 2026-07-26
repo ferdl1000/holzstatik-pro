@@ -64,7 +64,13 @@ export function autoDeriveGeometry(
     axes:  [...(sanitizedGeom.axes  ?? [])],
   };
 
-  const halfWidth = g.width.value / 2;
+  // Höhenunterschied First↔Traufe verteilt sich beim Satteldach/Walmdach auf die
+  // HALBE Breite, beim Pultdach dagegen auf die VOLLE Breite. Vorher wurde immer
+  // die halbe Breite gerechnet → Pultdächer bekamen die doppelte Neigung bzw.
+  // die halbe Firsthöhe.
+  const istPultdach = _roofType?.form === 'pultdach';
+  const halfWidth = istPultdach ? g.width.value : g.width.value / 2;
+  const breiteBezeichnung = istPultdach ? 'voller Breite' : 'halber Breite';
   const eaves = g.eavesHeight.value;
 
   // ── Dachneigung + First: alle vier Kombinationen ─────────────────────────
@@ -102,7 +108,7 @@ export function autoDeriveGeometry(
     assumptions.push({
       field: 'roofPitch',
       value: +pitch.toFixed(2),
-      reason: `Dachneigung berechnet aus First (${ridgeHeight} m), Traufe (${eaves} m) und halber Breite (${halfWidth} m).`,
+      reason: `Dachneigung berechnet aus First (${ridgeHeight} m), Traufe (${eaves} m) und ${breiteBezeichnung} (${halfWidth} m).`,
       source: 'derived',
     });
   } else if (hasPitch && !hasRidge) {
@@ -115,7 +121,7 @@ export function autoDeriveGeometry(
     assumptions.push({
       field: 'ridgeHeight',
       value: +ridge.toFixed(3),
-      reason: `Firsthöhe berechnet aus Neigung ${pitch}°, Traufe ${eaves} m und halber Breite ${halfWidth} m.`,
+      reason: `Firsthöhe berechnet aus Neigung ${pitch}°, Traufe ${eaves} m und ${breiteBezeichnung} ${halfWidth} m.`,
       source: 'derived',
     });
   }

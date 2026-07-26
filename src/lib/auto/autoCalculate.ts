@@ -198,11 +198,16 @@ function sparrenNormalkraft(
  *
  *  NICHT: sparrenSpacing (Sparrenabstand), der senkrecht zur Last wirkt.
  */
-function pfettenLoad(gk: number, sk: number, sparrenLaenge: number, _pfettenSpan: number): { qg: number; qs: number; tributaryWidth: number } {
+function pfettenLoad(gk: number, sk: number, sparrenLaenge: number, roofPitch: number): { qg: number; qs: number; tributaryWidth: number } {
   // Mittelpfette: trägt je halbe Sparrenlänge von oben und unten → gesamt sparrenLaenge/2
   const tributaryWidth = sparrenLaenge / 2;
+  // g_k bezieht sich auf die DACHFLÄCHE → direkt mit der Schrägen-Einzugsbreite.
+  // s_k bezieht sich nach ÖNORM auf den GRUNDRISS → die Einzugsbreite muss auf
+  // die Horizontale projiziert werden, sonst ist die Schneelast auf der Pfette
+  // um 1/cos α zu groß.
+  const cosA = Math.cos((roofPitch * Math.PI) / 180);
   const qg = gk * tributaryWidth;
-  const qs = sk * tributaryWidth;
+  const qs = sk * tributaryWidth * cosA;
   return { qg, qs, tributaryWidth };
 }
 
@@ -361,6 +366,28 @@ export function autoCalculateAllMembers(
   const gespaerreAnzahl = Math.max(1, Math.round(sparrenStk / 2));
   const zugbandPaare = Math.max(1, Math.round(zugbandStk / 2));
   const zugkraftProPaar = istGespaerre ? schub.H * (gespaerreAnzahl / zugbandPaare) : 0;
+
+  // ── Auflager der Pfetten offenlegen ───────────────────────────────────────
+  // Die Pfettenstützweite folgt aus dem angenommenen Auflagerabstand. In der
+  // Stückliste stehen aber oft weniger Holzsteher, weil die Pfetten auf
+  // tragenden Wänden aufliegen. Diese Differenz war bisher unsichtbar — jetzt
+  // wird sie beziffert, damit der Zimmermeister sie am Plan prüfen kann.
+  const tragendePfetten = members.filter(m => m.type === 'pfette' && /first|mittel/i.test(m.name));
+  if (tragendePfetten.length > 0) {
+    const buildingLen = geometry.length?.value ?? 0;
+    const felder = Math.max(1, Math.ceil(buildingLen / supportSpacing));
+    const zwischenAuflager = felder - 1;
+    const pfettenReihen = Math.max(1, tragendePfetten.reduce((s, m) => s + m.quantity, 0));
+    const steherStk = members.filter(m => m.type === 'stuetze').reduce((s, m) => s + m.quantity, 0);
+    const steherJeReihe = Math.floor(steherStk / pfettenReihen);
+    const wandAuflager = Math.max(0, zwischenAuflager - steherJeReihe);
+    assumptions.push({
+      field: 'pfette.auflager',
+      value: `${zwischenAuflager} Zwischenauflager je Pfette (Stützweite ${(buildingLen / felder).toFixed(2)} m)`,
+      reason: `Jede Pfette liegt auf den beiden Giebelwänden und ${zwischenAuflager} Zwischenauflagern: ${steherJeReihe} Holzsteher aus der Stückliste${wandAuflager > 0 ? ` + ${wandAuflager} tragende Innenwand/Unterzug (im Plan nicht nachgewiesen — BITTE PRÜFEN)` : ''}. Fehlt eine dieser Wände, muss dort ein zusätzlicher Steher gesetzt werden, sonst spannt die Pfette weiter als gerechnet.`,
+      source: wandAuflager > 0 ? 'fallback' : 'derived',
+    });
+  }
   if (kehlFactor < 1) {
     assumptions.push({
       field: 'sparren.stuetzweite',
@@ -408,7 +435,7 @@ export function autoCalculateAllMembers(
           break;
         }
         case 'pfette': {
-          const l = pfettenLoad(loads.gk, loads.sk, sparrenLaenge, pfettenSpan);
+          const l = pfettenLoad(loads.gk, loads.sk, sparrenLaenge, roofPitch);
           qg = l.qg; qs = l.qs;
           assumptions.push({
             field: `${member.name}.last`,
@@ -437,12 +464,17 @@ export function autoCalculateAllMembers(
           break;
         }
         case 'leimbinder': {
-          const l = leimbinderLoad(loads.gk, loads.sk, pfettenSpan);
+          // Ein Hauptträger trägt das Feld zwischen den Nachbarbindern, also
+          // den BINDERACHSABSTAND — nicht die ganze Gebäudelänge. Vorher wurde
+          // dafür die Gebäudelänge eingesetzt (Faktor 4–5 zu große Last).
+          const binderAnzahl = Math.max(2, member.quantity || 2);
+          const binderAbstand = +(pfettenSpan / (binderAnzahl - 1)).toFixed(2);
+          const l = leimbinderLoad(loads.gk, loads.sk, binderAbstand);
           qg = l.qg; qs = l.qs;
           assumptions.push({
             field: `${member.name}.last`,
             value: `qg=${qg.toFixed(2)} kN/m, qs=${qs.toFixed(2)} kN/m`,
-            reason: `Leimbinder: Lasteinzugsbreite = Pfettenabstand ${pfettenSpan} m (volles Lastfeld)`,
+            reason: `Leimbinder: Lasteinzugsbreite = Binderachsabstand ${binderAbstand} m (${binderAnzahl} Binder auf ${pfettenSpan} m Gebäudelänge)`,
             source: 'derived',
           });
           break;

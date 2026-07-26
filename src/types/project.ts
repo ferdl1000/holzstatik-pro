@@ -94,6 +94,29 @@ export interface Project {
   planMemberSections?: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
   /** Dachüberstand in m (aus Plan gelesen oder Default 0,4) — geht in Dachfläche + Sparrenlänge ein */
   roofOverhang?: number;
+  /** Ergebnis des letzten Auto-Laufs. Wird mitgespeichert, damit Annahmen,
+   *  Angebotssumme und die Begründung des Varianten-Vergleichs einen Reload
+   *  überleben — vorher lagen sie nur im Komponenten-State und waren nach dem
+   *  Neuladen der Seite weg. */
+  autoRun?: PersistedAutoRun;
+}
+
+/** Persistierter Auszug eines Pipeline-Laufs (bewusst strukturell definiert,
+ *  damit types/project.ts nicht auf lib/auto/contracts angewiesen ist). */
+export interface PersistedAutoRun {
+  ranAt: string;
+  summary?: string;
+  assumptions: { field: string; value: unknown; reason: string; source: string }[];
+  kosten?: {
+    net: number;
+    gross: number;
+    positions: {
+      category: string; description: string; quantity: number;
+      unit: string; unitPrice: number; total: number; notes?: string;
+    }[];
+    surcharges: { name: string; percent: number; amount: number }[];
+  };
+  joints?: { type: string; position: number; notes: string; extraCost: number }[];
 }
 
 // ===== Documents =====
