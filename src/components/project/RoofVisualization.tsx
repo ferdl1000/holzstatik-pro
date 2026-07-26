@@ -152,8 +152,7 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
 
   const buildingWidth = geo.width.value;
   const eavesH = geo.eavesHeight.value;
-  const ridgeH = geo.ridgeHeight.value > eavesH ? geo.ridgeHeight.value : eavesH + 2;
-  const roofH = ridgeH - eavesH;
+  const ridgeHRoh = geo.ridgeHeight.value > eavesH ? geo.ridgeHeight.value : eavesH + 2;
 
   // Was gezeichnet wird, entscheidet die ECHTE Bauteilliste — nicht der Tragsystem-Typ.
   // So kann nie eine Mittelpfette/ein Steher im Schnitt stehen, den es in members nicht gibt.
@@ -171,7 +170,7 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
   const ansicht = ansichtGeometrie({
     buildingWidth,
     eavesH,
-    ridgeH,
+    ridgeH: ridgeHRoh,
     form,
     sparrenHoehe: sparrenMember ? sparrenMember.height / 1000 : undefined,
     sparrenLaenge: sparrenMember?.length,
@@ -179,6 +178,9 @@ export function RoofVisualization({ project, width = 700, height = 400, showPosi
   });
   const isPult = ansicht.form === 'pultdach' || ansicht.form === 'flachdach';
   const [firstX, firstY] = ansicht.firstPunkt;
+  // Bemaßt wird, was gezeichnet ist (beim Flachdach ist First = Traufe).
+  const ridgeH = ansicht.ridgeH;
+  const roofH = ridgeH - eavesH;
   // Die bemaßte Neigung ist die GEZEICHNETE — beides kommt aus derselben Rechnung.
   const pitch = ansicht.neigungGrad;
 

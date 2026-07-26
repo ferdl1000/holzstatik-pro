@@ -123,7 +123,11 @@ export function autoGenerateMembers(
   // Traufseite immer, beim Satteldach zählt der Firstpunkt nicht (dort stößt der Gegensparren).
   const overhang = opts?.roofOverhang ?? 0.4;
   const pitchRadOv = ((geometry.roofPitch?.value ?? 30) * Math.PI) / 180;
-  const overhangSlope = overhang / Math.max(Math.cos(pitchRadOv), 0.5);
+  // Überstand entlang der Schräge = ü / cos α. Die frühere Kappung bei cos α = 0,5
+  // sollte eine Division durch null verhindern, hat aber ab 60° die BESTELLTE
+  // Sparrenlänge verkürzt: bei 70° fehlten 37 cm je Sparren. Gekappt wird jetzt
+  // erst bei 85°, wo kein Dach mehr steht — dort ist der Wert ohnehin bedeutungslos.
+  const overhangSlope = overhang / Math.max(Math.cos(pitchRadOv), 0.087);
   const sparrenLen = +(sparrenLenRaw + overhangSlope * (isPultdachForm ? 2 : 1)).toFixed(2);
   assumptions.push({
     field: 'roofOverhang',
