@@ -124,8 +124,38 @@ export function autoDeriveGeometry(
       reason: `Firsthöhe berechnet aus Neigung ${pitch}°, Traufe ${eaves} m und ${breiteBezeichnung} ${halfWidth} m.`,
       source: 'derived',
     });
+  } else {
+    // ── Beide vorhanden: passen sie zusammen? ──────────────────────────────
+    // Wenn der Plan z.B. "DN 30°" beschriftet, First und Traufe aber nur 24°
+    // ergeben, rechnet die Statik mit 30° und die Zeichnung zeigt 24°. Solche
+    // Widersprüche müssen aufgelöst werden, sonst passen Angebot und Plan nicht
+    // zusammen. Der Wert mit der höheren Konfidenz gewinnt; bei Gleichstand die
+    // beschriftete Neigung (die steht meist explizit im Plan).
+    const implizit = radToDeg(Math.atan2(g.ridgeHeight.value - eaves, halfWidth));
+    const abweichung = Math.abs(implizit - g.roofPitch.value);
+    if (abweichung > 1.5) {
+      const pitchGewinnt = g.roofPitch.confidence >= g.ridgeHeight.confidence;
+      if (pitchGewinnt) {
+        const neuerFirst = +(eaves + Math.tan(degToRad(g.roofPitch.value)) * halfWidth).toFixed(3);
+        assumptions.push({
+          field: 'ridgeHeight',
+          value: neuerFirst,
+          reason: `Widerspruch im Plan: First ${g.ridgeHeight.value} m und Traufe ${eaves} m ergeben ${implizit.toFixed(1)}°, beschriftet ist aber ${g.roofPitch.value}°. Die beschriftete Neigung ist maßgebend — Firsthöhe auf ${neuerFirst} m korrigiert, damit Statik, Mengen und Zeichnung dieselbe Geometrie verwenden. BITTE AM PLAN PRÜFEN.`,
+          source: 'fallback',
+        });
+        g.ridgeHeight = nwc(neuerFirst, 'm', 'calculated', Math.min(0.6, g.roofPitch.confidence));
+      } else {
+        const neuePitch = +implizit.toFixed(2);
+        assumptions.push({
+          field: 'roofPitch',
+          value: neuePitch,
+          reason: `Widerspruch im Plan: beschriftet ${g.roofPitch.value}°, aus First ${g.ridgeHeight.value} m und Traufe ${eaves} m ergeben sich aber ${neuePitch}°. Die Höhenmaße sind zuverlässiger — Neigung korrigiert, damit Statik, Mengen und Zeichnung zusammenpassen. BITTE AM PLAN PRÜFEN.`,
+          source: 'fallback',
+        });
+        g.roofPitch = nwc(neuePitch, '°', 'calculated', Math.min(0.6, g.ridgeHeight.confidence));
+      }
+    }
   }
-  // else: beide vorhanden → nichts zu tun
 
   // ── Konsistenz-Clamp: First ≥ Traufe ────────────────────────────────────
   if (g.ridgeHeight.value < g.eavesHeight.value) {

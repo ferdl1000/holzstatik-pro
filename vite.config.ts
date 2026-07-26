@@ -5,7 +5,9 @@ import path from "path";
 export default defineConfig({
   server: {
     host: "::",
-    port: 8080,
+    // PORT erlaubt es, den Dev-Server auf einen freien Port auszuweichen, wenn
+    // 8080 schon belegt ist. Ohne PORT bleibt es beim gewohnten 8080.
+    port: Number(process.env.PORT) || 8080,
     hmr: { overlay: false },
   },
   plugins: [react()],
