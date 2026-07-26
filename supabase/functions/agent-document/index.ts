@@ -156,10 +156,39 @@ Alle Ausgabewerte in Meter (m).
 Analysiere JEDE Seite. Grundrisse, Schnitte, Ansichten oft auf verschiedenen Seiten.
 Bevorzuge Höhenwerte aus SCHNITT, Grundrissmaße aus GRUNDRISS.
 
+=== PLANKOPF (Schriftfeld) — IMMER AUSLESEN ===
+Jeder österreichische Einreichplan hat ein Schriftfeld, meist unten rechts oder am rechten Rand.
+Dort stehen die Angaben, mit denen sich der Plan eindeutig identifizieren lässt. Lies sie ALLE aus:
+  - Bauvorhaben / Projektbezeichnung ("Neubau Einfamilienhaus", "Zubau", "Dachgeschossausbau" …)
+  - BAUHERR / Bauwerber: Name und dessen Wohnadresse
+  - PLANVERFASSER / Planer / Architekt / Baumeister: Büroname, Person, Büroadresse
+  - BAUADRESSE / Baugrundstück / Bauplatz: Straße, Hausnummer, PLZ, Ort
+  - Katastralgemeinde (KG) und Grundstücksnummer / Parzelle / EZ
+  - Plannummer, Planinhalt (Grundriss/Schnitt/Ansicht), Maßstab, Planungsdatum
+
+ENTSCHEIDEND UND HÄUFIGSTE FEHLERQUELLE: Die Adresse des PLANVERFASSERS ist NICHT die Bauadresse!
+Im Schriftfeld stehen oft beide untereinander. Die Bauadresse steht bei "Bauvorhaben", "Bauplatz",
+"Baugrundstück", "Bauadresse" oder direkt bei der Grundstücksnummer; die Büroadresse steht beim
+Planverfasser/Architekten, oft zusammen mit Telefonnummer, E-Mail, ZT-Nummer oder Firmenlogo.
+Ordne im Zweifel NICHT zu und setze confidence niedrig, statt zu raten.
+
+Wenn die Bauadresse keine Straße nennt (bei Neubauten auf unbebauten Parzellen üblich), dann liefere
+wenigstens PLZ, Ort, Katastralgemeinde und Grundstücksnummer — Schneelastzone und Seehöhe hängen
+allein an PLZ und Ort.
+
 === JSON-SCHEMA ===
 {
   "texts": [{ "content": "...", "category": "address|dimension|label|note|title|other", "confidence": 0.0..1.0 }],
   "dimensions": [{ "value": 12.5, "unit": "m", "label": "Gebäudelänge|Gebäudebreite|Firsthöhe|Traufhöhe|Dachneigung|Dachneigung_berechnet|Spannweite", "confidence": 0..1 }],
+  "planHeader": {
+    "bauvorhaben": "",
+    "bauherr": { "name": "", "adresse": "" },
+    "planverfasser": { "buero": "", "name": "", "adresse": "" },
+    "bauadresse": { "strasse": "", "hausnummer": "", "plz": "", "ort": "", "katastralgemeinde": "", "grundstueck": "" },
+    "planNummer": "", "planDatum": "", "massstab": "",
+    "evidence": "wörtliches Zitat aus dem Schriftfeld",
+    "confidence": 0..1
+  },
   "addresses": [{ "fullAddress": "...", "context": "z.B. 'Bauvorhaben'", "isBuildingAddress": true, "confidence": 0..1, "excludeReason": "" }],
   "roofHints": { "form": "satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform|sheddach|tonnendach|mansardendach|sonderfall", "pitch": 35, "confidence": 0..1, "ridgeDirection": "Nord-Süd|Ost-West|unbekannt" },
   "covering": {
@@ -479,10 +508,39 @@ WENN GK nicht explizit angegeben aber Gebäude-Daten ableitbar:
 - mehr Geschosse → höhere GK
 Eintragen mit confidence < 0.5 + assumption "GK aus Gebäude-Daten abgeleitet".
 
+=== PLANKOPF (Schriftfeld) — IMMER AUSLESEN ===
+Jeder österreichische Einreichplan hat ein Schriftfeld, meist unten rechts oder am rechten Rand.
+Dort stehen die Angaben, mit denen sich der Plan eindeutig identifizieren lässt. Lies sie ALLE aus:
+  - Bauvorhaben / Projektbezeichnung ("Neubau Einfamilienhaus", "Zubau", "Dachgeschossausbau" …)
+  - BAUHERR / Bauwerber: Name und dessen Wohnadresse
+  - PLANVERFASSER / Planer / Architekt / Baumeister: Büroname, Person, Büroadresse
+  - BAUADRESSE / Baugrundstück / Bauplatz: Straße, Hausnummer, PLZ, Ort
+  - Katastralgemeinde (KG) und Grundstücksnummer / Parzelle / EZ
+  - Plannummer, Planinhalt (Grundriss/Schnitt/Ansicht), Maßstab, Planungsdatum
+
+ENTSCHEIDEND UND HÄUFIGSTE FEHLERQUELLE: Die Adresse des PLANVERFASSERS ist NICHT die Bauadresse!
+Im Schriftfeld stehen oft beide untereinander. Die Bauadresse steht bei "Bauvorhaben", "Bauplatz",
+"Baugrundstück", "Bauadresse" oder direkt bei der Grundstücksnummer; die Büroadresse steht beim
+Planverfasser/Architekten, oft zusammen mit Telefonnummer, E-Mail, ZT-Nummer oder Firmenlogo.
+Ordne im Zweifel NICHT zu und setze confidence niedrig, statt zu raten.
+
+Wenn die Bauadresse keine Straße nennt (bei Neubauten auf unbebauten Parzellen üblich), dann liefere
+wenigstens PLZ, Ort, Katastralgemeinde und Grundstücksnummer — Schneelastzone und Seehöhe hängen
+allein an PLZ und Ort.
+
 === JSON-SCHEMA ===
 {
   "texts": [{ "content": "...", "category": "address|dimension|label|note|title|other", "confidence": 0.0..1.0 }],
   "dimensions": [{ "value": 12.5, "unit": "m", "label": "Gebäudelänge|Gebäudebreite|Firsthöhe|Traufhöhe|Dachneigung|Dachneigung_berechnet|Spannweite", "confidence": 0..1 }],
+  "planHeader": {
+    "bauvorhaben": "",
+    "bauherr": { "name": "", "adresse": "" },
+    "planverfasser": { "buero": "", "name": "", "adresse": "" },
+    "bauadresse": { "strasse": "", "hausnummer": "", "plz": "", "ort": "", "katastralgemeinde": "", "grundstueck": "" },
+    "planNummer": "", "planDatum": "", "massstab": "",
+    "evidence": "wörtliches Zitat aus dem Schriftfeld",
+    "confidence": 0..1
+  },
   "addresses": [{ "fullAddress": "...", "context": "z.B. 'Bauvorhaben'", "isBuildingAddress": true, "confidence": 0..1, "excludeReason": "" }],
   "roofHints": { "form": "satteldach|pultdach|walmdach|krueppelwalmdach|flachdach|mischform|sheddach|tonnendach|mansardendach|sonderfall", "pitch": 35, "confidence": 0..1, "ridgeDirection": "Nord-Süd|Ost-West|unbekannt" },
   "covering": {

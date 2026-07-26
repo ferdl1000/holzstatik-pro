@@ -3,6 +3,17 @@
  *  1) Querschnitt (durch Sparren, senkrecht zum First)
  *  2) Längsschnitt (parallel zum First)
  *  3) Detail Traufe (Sparren-Fußpfette-Auflager)
+ *
+ * GRUNDREGELN, die die Selbstprüfung (__tests__/schnittGeometrie.test.tsx)
+ * an der fertigen Zeichnung nachmisst:
+ *  • Der Maßstab ist ISOTROP — ein Meter waagrecht ist im Bild so lang wie ein
+ *    Meter lotrecht. Sonst sieht ein 5°-Dach aus wie ein 70°-Dach.
+ *  • Die GEZEICHNETE Sparrenneigung ist die, die sich aus Trauf-/Firsthöhe und
+ *    Spannweite ergibt. Weicht sie vom Plan-Wert ab, wird das ANGESCHRIEBEN
+ *    („… gezeichnet — Plan sagt …, PRÜFEN") statt stillschweigend versteckt.
+ *  • Der Sparren läuft bis zum First und liegt dort auf der Firstpfette auf.
+ *  • Bemaßungen sitzen mit festem Pixel-Abstand am Bild — nie in Metern, sonst
+ *    wandern sie bei flachen Dächern aus der Zeichenfläche hinaus.
  */
 
 import type { BuildingGeometry, TimberMember } from '@/types/project';
@@ -34,12 +45,32 @@ function fmtDeg(deg: number): string {
   return `${Math.round(deg)}°`;
 }
 
+/**
+ * Die Neigung, die sich aus den HÖHEN ergibt — und damit die, die gezeichnet
+ * wird. Beim Pultdach über die volle Breite, beim Satteldach über die halbe.
+ */
+function tanAusHoehen(geometry: BuildingGeometry, roofForm?: string): number {
+  const bldW = geometry.width.value;
+  const rise = geometry.ridgeHeight.value - geometry.eavesHeight.value;
+  const span = roofForm === 'pultdach' ? bldW : bldW / 2;
+  return rise / Math.max(span, 0.1);
+}
+
+/** Anschrift der Neigung; deckt einen Widerspruch zum Plan-Wert offen auf. */
+function neigungsText(pitchDrawn: number, pitchPlan: number): string {
+  return Math.abs(pitchDrawn - pitchPlan) > 1
+    ? `${fmtDeg(pitchDrawn)} gezeichnet — Plan sagt ${fmtDeg(pitchPlan)}, PRÜFEN`
+    : `${fmtDeg(pitchDrawn)}`;
+}
+
 // ── Bemaßungs-Linie ─────────────────────────────────────────────────────────
 function Dim({
-  x1, y1, x2, y2, label, offset = 14, flip = false,
+  x1, y1, x2, y2, label, offset = 14, flip = false, mass,
 }: {
   x1: number; y1: number; x2: number; y2: number;
   label: string; offset?: number; flip?: boolean;
+  /** Kennzeichnung für die geometrische Selbstprüfung (data-mass) */
+  mass?: string;
 }) {
   const dx = x2 - x1, dy = y2 - y1;
   const len = Math.sqrt(dx * dx + dy * dy);
@@ -53,7 +84,7 @@ function Dim({
   const ax2 = x2 - ux * 6, ay2 = y2 - uy * 6;
   const color = '#888';
   return (
-    <g>
+    <g data-mass={mass}>
       {/* Maßlinie */}
       <line x1={ax1} y1={ay1} x2={ax2} y2={ay2} stroke={color} strokeWidth={0.8} />
       {/* Pfeile */}
@@ -125,22 +156,9 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
   const ridgeH = geometry.ridgeHeight.value;  // m
   const eavesH = geometry.eavesHeight.value;  // m
   const pitchDeg = geometry.roofPitch.value;  // °
-  const pitchRad = (pitchDeg * Math.PI) / 180;
 
   const drawW = W - pad.l - pad.r;
   const drawH = H - pad.t - pad.b;
-
-  // EIN Maßstab für ALLES — Gebäudemaße wie Holzquerschnitte. Nur so stimmt die
-  // gezeichnete Dachneigung mit der bemaßten überein und ein 10/22-Pfettenholz
-  // ist im Bild auch 10/22.
-  const s = Math.min(drawW / Math.max(bldW, 0.1), drawH / Math.max(ridgeH * 1.15, 0.1));
-  const xOff = (drawW - bldW * s) / 2;   // waagrecht zentriert
-
-  // SVG koordinaten (y zeigt nach unten, 0 = Boden)
-  const toSX = (mx: number) => pad.l + xOff + mx * s;
-  const toSY = (my: number) => pad.t + drawH - my * s;
-  /** Querschnittsmaß [mm] → px, im selben Maßstab (2 px nur als Sichtbarkeits-Untergrenze) */
-  const px = (mm: number) => Math.max(2, (mm / 1000) * s);
 
   const isPult = roofForm === 'pultdach';
   const isFlach = roofForm === 'flachdach';
@@ -151,9 +169,38 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
   const yEaves = eavesH;
   const yRidge = ridgeH;
   const heightRise = ridgeH - eavesH;
+  const halfSpan = bldW / 2;
+
+  // Dachüberstand aus dem Projekt (gleicher Wert wie in der Mengenermittlung)
+  const ueberstand = roofOverhang ?? DEFAULT_ROOF_OVERHANG;
+  const wandDicke = 0.30; // m — Mauerkrone/Außenwand im Schnitt
+
+  // Neigung, die sich aus Trauf-/Firsthöhe und Spannweite tatsächlich ergibt —
+  // das ist die Linie, die gezeichnet wird (und die der Bogen bemaßen muss).
+  const tanRoof = isFlach ? 0 : tanAusHoehen(geometry, roofForm);
+  const pitchDrawn = (Math.atan(tanRoof) * 180) / Math.PI;
+  const drawRad = (pitchDrawn * Math.PI) / 180;
+  const cosDraw = Math.cos(drawRad);
+  const sinDraw = Math.sin(drawRad);
+
+  // EIN Maßstab für ALLES — Gebäudemaße wie Holzquerschnitte, waagrecht wie
+  // lotrecht. Nur so stimmt die gezeichnete Dachneigung mit der bemaßten
+  // überein und ein 10/22-Pfettenholz ist im Bild auch 10/22. Der Überstand
+  // geht in die Rechnung ein, damit er nicht aus dem Bild läuft.
+  const hMax = (isFlach ? eavesH : ridgeH + (isPult ? ueberstand * tanRoof : 0)) * 1.06;
+  const s = Math.min(
+    drawW / Math.max(bldW + 2 * ueberstand, 0.1),
+    drawH / Math.max(hMax, 0.1),
+  );
+  const xOff = (drawW - bldW * s) / 2;   // Gebäude waagrecht zentriert
+
+  // SVG koordinaten (y zeigt nach unten, 0 = Boden)
+  const toSX = (mx: number) => pad.l + xOff + mx * s;
+  const toSY = (my: number) => pad.t + drawH - my * s;
+  /** Querschnittsmaß [mm] → px, im selben Maßstab (2 px nur als Sichtbarkeits-Untergrenze) */
+  const px = (mm: number) => Math.max(2, (mm / 1000) * s);
 
   // Sparren: Länge am Schräg
-  const halfSpan = bldW / 2;
   const sparrenLenSattel = Math.sqrt(halfSpan * halfSpan + heightRise * heightRise);
   const sparrenLenPult = Math.sqrt(bldW * bldW + heightRise * heightRise);
   const sparrenLen = isPult ? sparrenLenPult : sparrenLenSattel;
@@ -172,18 +219,33 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
   const firstPf = members.find(m => m.type === 'pfette' && /first/i.test(m.name));
   const mittelPf = members.find(m => m.type === 'pfette' && /mittel/i.test(m.name));
 
-  // Dachüberstand aus dem Projekt (gleicher Wert wie in der Mengenermittlung)
-  const ueberstand = roofOverhang ?? DEFAULT_ROOF_OVERHANG;
-  const wandDicke = 0.30; // m — Mauerkrone/Außenwand im Schnitt
-
-  // Neigung, die sich aus Trauf-/Firsthöhe und Spannweite tatsächlich ergibt —
-  // das ist die Linie, die gezeichnet wird (und die der Bogen bemaßen muss).
-  const tanRoof = (yRidge - yEaves) / Math.max(isPult ? bldW : halfSpan, 0.1);
-  const pitchDrawn = isFlach ? 0 : (Math.atan(tanRoof) * 180) / Math.PI;
-
   // Aufbau-Schichten: Dicke in m (symbolisch)
   const lattH = 0.04;
   const deckH = 0.06;
+
+  // Holzquerschnitte maßstäblich in px. autoMembers legt die Mauerbank liegend
+  // (140/100) und First-/Mittelpfette hochkant (100/220) an → width = waagrecht,
+  // height = lotrecht.
+  const mbB = px(mauerbank?.width ?? 140), mbH = px(mauerbank?.height ?? 100);
+  const fpB = px(firstPf?.width ?? 100), fpH = px(firstPf?.height ?? 220);
+  const mpB = px(mittelPf?.width ?? 100), mpH = px(mittelPf?.height ?? 220);
+  const wandT = px(wandDicke * 1000);
+  /** Strichstärke der Sparrenlinie = echte Sparrenhöhe */
+  const sw = sparren ? px(sparren.height) : 3;
+  // Die Sparrenlinie ist MITTIG gezeichnet (Strichstärke = Sparrenhöhe).
+  // Ihre UNTERKANTE liegt lotrecht um (h/2)/cos α tiefer — genau dort muss die
+  // Pfettenoberkante sitzen, sonst schwebt der Sparren über der Pfette (das war
+  // der reklamierte Fehler „Sparren geht nicht bis zur Firstpfette").
+  const ukVersatz = (sw / 2) / Math.max(cosDraw, 0.05);
+  // Traufhöhe = OK Mauerbank = Auflagerebene der Sparren. Darunter liegt die
+  // Mauerbank, darunter erst das Mauerwerk (bauseits).
+  const yMauerkrone = toSY(yEaves) + mbH;
+
+  // Bemaßungen sitzen in PIXELN neben dem Bild — in Metern gerechnet wandern
+  // sie bei flachen Dächern (großer Maßstab) aus der Zeichenfläche.
+  const yDimBreite = Math.min(H - 30, toSY(yGround) + 26);
+  const xDimFirst = Math.max(14, toSX(xL) - 46);
+  const xDimTraufe = Math.min(W - 14, toSX(xR) + 46);
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
@@ -196,15 +258,15 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
       {/* Aussenwände — BAUSEITS (Mauerwerk), deshalb grau und nicht wie Holz.
           Die Mauerkrone inkl. Auflager für die Mauerbank muss der Baumeister
           fertig herstellen, bevor die Zimmerei kommt. */}
-      <rect x={toSX(xL) - px(wandDicke * 1000)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
-      <rect x={toSX(xR)} y={toSY(yEaves)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yEaves)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect data-teil="wand-links" x={toSX(xL) - wandT} y={yMauerkrone} width={wandT} height={toSY(yGround) - yMauerkrone} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect data-teil="wand-rechts" x={toSX(xR)} y={yMauerkrone} width={wandT} height={toSY(yGround) - yMauerkrone} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
 
       {/* Tragende Innenwände/Auflager unter den Mittelpfetten — NUR wenn die
           Statik Mittelpfetten vorsieht (beim Sparren-/Kehlbalkendach entfällt beides) */}
       {!isPult && !isFlach && mittelPf && (
         <>
-          <rect x={toSX(xMidL) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
-          <rect x={toSX(xMidR) - px(wandDicke * 1000) / 2} y={toSY(yMid)} width={px(wandDicke * 1000)} height={toSY(yGround) - toSY(yMid)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
+          <rect x={toSX(xMidL) - wandT / 2} y={toSY(yMid) + ukVersatz + mpH} width={wandT} height={Math.max(0, toSY(yGround) - toSY(yMid) - ukVersatz - mpH)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
+          <rect x={toSX(xMidR) - wandT / 2} y={toSY(yMid) + ukVersatz + mpH} width={wandT} height={Math.max(0, toSY(yGround) - toSY(yMid) - ukVersatz - mpH)} fill="url(#qs-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1} />
         </>
       )}
 
@@ -212,15 +274,8 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
           Sparrenlinie — die Sparren ruhen auf ihnen. Mauerbank AUF der
           Mauerkrone, innenbündig. Größen aus dem echten Pfetten-Querschnitt. */}
       {(() => {
-        // Jede Pfette mit IHREM Querschnitt aus der Bauteilliste, maßstäblich.
-        // autoMembers legt die Mauerbank liegend (140/100) und First-/Mittelpfette
-        // hochkant (100/220) an → width = waagrecht, height = lotrecht.
-        const mbB = px(mauerbank?.width ?? 140), mbH = px(mauerbank?.height ?? 100);
-        const fpB = px(firstPf?.width ?? 100), fpH = px(firstPf?.height ?? 220);
-        const mpB = px(mittelPf?.width ?? 100), mpH = px(mittelPf?.height ?? 220);
         const ov = ueberstand; // Dachüberstand im Schnitt [m] — aus dem Projekt
-        const tanP = isFlach ? 0.03 : tanRoof;
-        const sw = sparren ? px(sparren.height) : 3; // Sparrenlinie = echte Sparrenhöhe
+        const tanP = isFlach ? 0 : tanRoof;
         // NUR zeichnen, was die Statik wirklich vorsieht — beim Sparrendach gibt
         // es KEINE First-/Mittelpfetten (die Zeichnung folgt der Bauteilliste).
         const hasFirst = !!firstPf;
@@ -229,28 +284,31 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
         const kehl = members.find(m => m.type === 'kehlbalken');
         return (
           <g>
-            {/* Mauerbänke: liegen AUF der Mauerkrone, UNTER dem Sparren (Kerve) */}
-            <rect x={toSX(xL) + 2} y={toSY(yEaves) - mbH} width={mbB} height={mbH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-            <rect x={toSX(xR) - 2 - mbB} y={toSY(yEaves) - mbH} width={mbB} height={mbH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+            {/* Mauerbänke: liegen AUF der Mauerkrone, innenbündig, und UNTER
+                dem Sparren (der über die Kerve aufliegt). Oberkante = Traufhöhe. */}
+            <rect data-teil="mauerbank" x={toSX(xL) - mbB} y={toSY(yEaves)} width={mbB} height={mbH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+            <rect data-teil="mauerbank" x={toSX(xR)} y={toSY(yEaves)} width={mbB} height={mbH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
 
             {/* Mittelpfetten: nur wenn statisch vorhanden, stehend unter der Sparrenlage */}
             {hasMittel && !isPult && !isFlach && (
               <>
-                <rect x={toSX(xMidL) - mpB / 2} y={toSY(yMid) + sw / 2} width={mpB} height={mpH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
-                <rect x={toSX(xMidR) - mpB / 2} y={toSY(yMid) + sw / 2} width={mpB} height={mpH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+                <rect data-teil="mittelpfette" x={toSX(xMidL) - mpB / 2} y={toSY(yMid) + ukVersatz} width={mpB} height={mpH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
+                <rect data-teil="mittelpfette" x={toSX(xMidR) - mpB / 2} y={toSY(yMid) + ukVersatz} width={mpB} height={mpH} fill="url(#qs-wood)" stroke="#333" strokeWidth={1} />
               </>
             )}
 
-            {/* Firstpfette: nur wenn statisch vorhanden */}
+            {/* Firstpfette: nur wenn statisch vorhanden. Oberkante = Sparren-
+                Unterkante am First — der Sparren liegt AUF, ohne Luft dazwischen. */}
             {hasFirst && !isPult && !isFlach && (
-              <rect x={toSX(xM) - fpB / 2} y={toSY(yRidge) + sw / 2} width={fpB} height={fpH}
+              <rect data-teil="firstpfette" x={toSX(xM) - fpB / 2} y={toSY(yRidge) + ukVersatz} width={fpB} height={fpH}
                     fill="url(#qs-wood)" stroke="#333" strokeWidth={1.2} />
             )}
 
             {/* Zange/Kehlbalken: waagrechtes Holz, hält das Gespärre zusammen */}
             {(zange || kehl) && !isPult && !isFlach && (() => {
               const zy = kehl ? yEaves + (yRidge - yEaves) * 0.6 : (hasMittel ? yMid : yEaves + 0.3);
-              const zHalf = (yRidge - zy) / Math.max(tanP, 0.1); // wo die Zange die Sparren trifft
+              // wo die Zange die Sparren trifft — echte Geometrie, nicht gekappt
+              const zHalf = Math.min(halfSpan, (yRidge - zy) / Math.max(tanP, 0.005));
               return (
                 <g>
                   <line x1={toSX(xM - zHalf)} y1={toSY(zy)} x2={toSX(xM + zHalf)} y2={toSY(zy)}
@@ -262,18 +320,19 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
               );
             })()}
 
-            {/* Sparrenlinien MIT Dachüberstand über die Traufe hinaus */}
+            {/* Sparrenlinien MIT Dachüberstand über die Traufe hinaus.
+                Der obere Endpunkt trifft EXAKT den Firstpunkt. */}
             {isPult ? (
-              <line x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xR + ov)} y2={toSY(yRidge + ov * tanP)}
+              <line data-teil="sparren" x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xR + ov)} y2={toSY(yRidge + ov * tanP)}
                     stroke="#333" strokeWidth={sw} />
             ) : isFlach ? (
-              <line x1={toSX(xL - ov)} y1={toSY(yEaves)} x2={toSX(xR + ov)} y2={toSY(yEaves)}
+              <line data-teil="sparren" x1={toSX(xL - ov)} y1={toSY(yEaves)} x2={toSX(xR + ov)} y2={toSY(yEaves)}
                     stroke="#333" strokeWidth={sw} />
             ) : (
               <>
-                <line x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
+                <line data-teil="sparren" x1={toSX(xL - ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
                       stroke="#333" strokeWidth={sw} />
-                <line x1={toSX(xR + ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
+                <line data-teil="sparren" x1={toSX(xR + ov)} y1={toSY(yEaves - ov * tanP)} x2={toSX(xM)} y2={toSY(yRidge)}
                       stroke="#333" strokeWidth={sw} />
               </>
             )}
@@ -283,17 +342,17 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
         );
       })()}
 
-      {/* Aufbau: Lattung + Eindeckung */}
+      {/* Aufbau: Lattung + Eindeckung — senkrecht zur GEZEICHNETEN Dachfläche */}
       {!isFlach && (() => {
-        const fracs = isPult ? [0.2, 0.4, 0.6, 0.8] : [0.2, 0.4, 0.6, 0.8];
-        const startX = isPult ? xL : xL;
+        const fracs = [0.2, 0.4, 0.6, 0.8];
+        const startX = xL;
         const endX = isPult ? xR : xM;
-        const startY = isPult ? yEaves : yEaves;
-        const endY = isPult ? yRidge : yRidge;
+        const startY = yEaves;
+        const endY = yRidge;
         return fracs.map(f => {
           const lx = startX + (endX - startX) * f;
           const ly = startY + (endY - startY) * f;
-          const nx2 = -Math.sin(pitchRad), ny2 = Math.cos(pitchRad);
+          const nx2 = -sinDraw, ny2 = cosDraw;
           return (
             <g key={f}>
               <line
@@ -314,8 +373,8 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
           { off: 12, label: '3', color: '#8a5a2b', name: 'Konterlattung 5/8' },
           { off: 16, label: '4', color: '#8a5a2b', name: 'Lattung 3/5 + Eindeckung' },
         ];
-        const nx2 = isFlach ? 0 : -Math.sin(pitchRad);
-        const ny2 = isFlach ? 1 : Math.cos(pitchRad);
+        const nx2 = isFlach ? 0 : -sinDraw;
+        const ny2 = isFlach ? 1 : cosDraw;
         const sX = toSX(xL), sY = toSY(yEaves);
         const eX = toSX(isPult || isFlach ? xR : xM), eY = toSY(isFlach ? yEaves : yRidge);
         return (
@@ -344,28 +403,28 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
 
       {/* Bemaßungen */}
       {/* Gebäudebreite unten */}
-      <Dim x1={toSX(xL)} y1={toSY(-0.4)} x2={toSX(xR)} y2={toSY(-0.4)} label={fmt(bldW)} />
+      <Dim mass="breite" x1={toSX(xL)} y1={yDimBreite} x2={toSX(xR)} y2={yDimBreite} label={fmt(bldW)} />
 
       {/* Firsthöhe links vertikal */}
-      <Dim x1={toSX(-0.8)} y1={toSY(yGround)} x2={toSX(-0.8)} y2={toSY(yRidge)} label={fmt(ridgeH)} />
+      <Dim mass="firsthoehe" x1={xDimFirst} y1={toSY(yGround)} x2={xDimFirst} y2={toSY(yRidge)} label={fmt(ridgeH)} />
 
       {/* Traufhöhe rechts vertikal */}
-      <Dim x1={toSX(bldW + 0.8)} y1={toSY(yGround)} x2={toSX(bldW + 0.8)} y2={toSY(yEaves)} label={fmt(eavesH)} flip />
+      <Dim mass="traufhoehe" x1={xDimTraufe} y1={toSY(yGround)} x2={xDimTraufe} y2={toSY(yEaves)} label={fmt(eavesH)} flip />
 
       {/* Sparrenlänge entlang Sparren */}
       {!isFlach && (
         <Dim
-          x1={toSX(isPult ? xL : xL)} y1={toSY(isPult ? yEaves : yEaves)}
-          x2={toSX(isPult ? xR : xM)} y2={toSY(isPult ? yRidge : yRidge)}
+          x1={toSX(xL)} y1={toSY(yEaves)}
+          x2={toSX(isPult ? xR : xM)} y2={toSY(yRidge)}
           label={fmt(sparrenLen)} offset={16}
         />
       )}
 
       {/* Stützenabstand (Mitte zu Aussenkante, nur Satteldach) */}
-      {!isPult && !isFlach && (
+      {!isPult && !isFlach && mittelPf && (
         <Dim
-          x1={toSX(xL)} y1={toSY(yEaves - 0.15)}
-          x2={toSX(xMidL)} y2={toSY(yEaves - 0.15)}
+          x1={toSX(xL)} y1={toSY(yEaves) + 18}
+          x2={toSX(xMidL)} y2={toSY(yEaves) + 18}
           label={fmt(xMidL - xL)} flip
         />
       )}
@@ -380,15 +439,14 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
         const toRad = (d: number) => (d * Math.PI) / 180;
         const ex = cx + r * Math.cos(toRad(endAngle));
         const ey = cy + r * Math.sin(toRad(endAngle));
-        const largeArc = pitchDrawn > 180 ? 1 : 0;
         return (
           <g>
             <path
-              d={`M ${cx + r},${cy} A ${r},${r} 0 ${largeArc},0 ${ex},${ey}`}
+              d={`M ${cx + r},${cy} A ${r},${r} 0 0,0 ${ex},${ey}`}
               fill="none" stroke="#888" strokeWidth={0.9}
             />
             <text x={cx + r + 8} y={cy - 10} fill="#555" fontSize={11} fontFamily="sans-serif">
-              {fmtDeg(pitchDrawn)}{Math.abs(pitchDrawn - pitchDeg) > 1 ? ` (Plan ${fmtDeg(pitchDeg)})` : ''}
+              {neigungsText(pitchDrawn, pitchDeg)}
             </text>
           </g>
         );
@@ -412,7 +470,7 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
         Mauerbank {mauerbank ? (mauerbank.crossSection ?? `${mauerbank.width}/${mauerbank.height}`) : ''}
       </text>
       {coveringName && !isFlach && (
-        <text x={toSX(isPult ? xM : xM) - 60} y={toSY((yRidge + yEaves) / 2) - 10} fill="#555" fontSize={10} fontFamily="sans-serif" transform={`rotate(${-pitchDeg},${toSX(isPult ? xM : xM) - 60},${toSY((yRidge + yEaves) / 2) - 10})`}>{coveringName}</text>
+        <text x={toSX(xM) - 60} y={toSY((yRidge + yEaves) / 2) - 10} fill="#555" fontSize={10} fontFamily="sans-serif" transform={`rotate(${-pitchDrawn},${toSX(xM) - 60},${toSY((yRidge + yEaves) / 2) - 10})`}>{coveringName}</text>
       )}
 
       {/* Titel */}
@@ -426,7 +484,7 @@ export function Querschnitt({ geometry, members, coveringName, roofForm, roofOve
 // ════════════════════════════════════════════════════════════════════════════
 // 2) LÄNGSSCHNITT
 // ════════════════════════════════════════════════════════════════════════════
-export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometry; members: TimberMember[] }) {
+export function Laengsschnitt({ geometry, members, roofForm }: { geometry: BuildingGeometry; members: TimberMember[]; roofForm?: string }) {
   const W = 800, H = 400;
   const pad = { l: 90, r: 40, t: 50, b: 60 };
 
@@ -437,26 +495,40 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
   const drawW = W - pad.l - pad.r;
   const drawH = H - pad.t - pad.b;
 
-  const scaleX = drawW / bldL;
-  const maxH = ridgeH * 1.2;
-  const scaleY = drawH / maxH;
+  // EIN Maßstab für waagrecht UND lotrecht. Vorher waren es zwei — dadurch war
+  // jede Höhe im Längsschnitt gegenüber der Länge verzerrt.
+  const s = Math.min(drawW / Math.max(bldL, 0.1), drawH / Math.max(ridgeH * 1.2, 0.1));
+  const xOff = (drawW - bldL * s) / 2;
 
-  const toSX = (mx: number) => pad.l + mx * scaleX;
-  const toSY = (my: number) => pad.t + drawH - my * scaleY;
+  const toSX = (mx: number) => pad.l + xOff + mx * s;
+  const toSY = (my: number) => pad.t + drawH - my * s;
+  const px = (mm: number) => Math.max(2, (mm / 1000) * s);
 
   // Die Zeichnung folgt der BAUTEILLISTE — was die Statik nicht vorsieht,
   // wird auch nicht gezeichnet (z.B. keine Pfetten beim Sparren-/Kehlbalkendach).
-  const hasFirst = members.some(m => m.type === 'pfette' && /first/i.test(m.name));
-  const hasMittel = members.some(m => m.type === 'pfette' && /mittel/i.test(m.name));
+  const firstPf = members.find(m => m.type === 'pfette' && /first/i.test(m.name));
+  const mittelPf = members.find(m => m.type === 'pfette' && /mittel/i.test(m.name));
+  const mauerbank = members.find(m => m.type === 'pfette' && /(mauerbank|fußpfette|fusspfette)/i.test(m.name))
+    ?? members.find(m => m.type === 'pfette' && !/(first|mittel)/i.test(m.name));
+  const hasFirst = !!firstPf;
+  const hasMittel = !!mittelPf;
   const zange = members.find(m => m.type === 'zange');
   const kehl = members.find(m => m.type === 'kehlbalken');
+  const sparren = members.find(m => m.type === 'sparren');
+
+  // Sparren-Unterkante am First: dieselbe Regel wie im Querschnitt, damit
+  // Firstpfette in beiden Schnitten auf derselben Höhe liegt.
+  const tanRoof = tanAusHoehen(geometry, roofForm);
+  const cosRoof = 1 / Math.sqrt(1 + tanRoof * tanRoof);
+  const swPx = px(sparren?.height ?? 160);
+  const ukVersatz = (swPx / 2) / Math.max(cosRoof, 0.05);
 
   // ── Steher: die Zeichnung zeigt, was die Statik gerechnet hat ──────────────
   // member.length ist die KNICKLÄNGE aus dem Nachweis — die Stütze reicht also
   // NICHT vom Fußboden bis zur Pfette, sondern steht auf der Deckenebene.
   const stList = members.filter(m => m.type === 'stuetze');
   const stH = stList[0]?.length ?? 0;                                   // m
-  const stQtyTotal = stList.reduce((s, m) => s + Math.max(1, m.quantity), 0);
+  const stQtyTotal = stList.reduce((s2, m) => s2 + Math.max(1, m.quantity), 0);
   // autoMembers verteilt die Steher auf 3 Pfettenreihen (First + 2 Mittelpfetten)
   // bzw. auf 1 (nur Firstpfette). Im Längsschnitt liegen die beiden Mittelpfetten-
   // Reihen HINTEREINANDER → ein Steher-Band unter dem First, eines unter der Mitte.
@@ -468,11 +540,27 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
   const stuetzPositions: number[] = Array.from({ length: stuetzenProReihe }, (_, i) =>
     ((i + 1) / (stuetzenProReihe + 1)) * bldL
   );
-  const stHpx = Math.max(3, stH * scaleY);
 
   // Mittelpfetten-Höhe exakt wie autoMembers: Traufe + halbe Dachhöhe
   const midH2 = eavesH + (ridgeH - eavesH) * 0.5;
   const zangenH = kehl ? eavesH + (ridgeH - eavesH) * 0.6 : (hasMittel ? midH2 : eavesH + 0.3);
+
+  // Pfetten-Bänder: Oberkante = Sparrenunterkante, Höhe = echter Querschnitt
+  const fpH = px(firstPf?.height ?? 220);
+  const mpH = px(mittelPf?.height ?? 220);
+  const mbH = px(mauerbank?.height ?? 100);
+  const yFirstOK = toSY(ridgeH) + ukVersatz;
+  const yMidOK = toSY(midH2) + ukVersatz;
+  /** Steherlänge in px, aber nie durch den Fußboden hindurch */
+  const stLen = (top: number) => Math.max(3, Math.min(stH * s, toSY(0) - top));
+
+  // Bemaßungen in Pixeln neben/unter dem Bild (in Metern würden sie bei
+  // flachen Dächern aus der Zeichenfläche laufen).
+  const yBase = toSY(0);
+  const yDimFelder = Math.min(H - 44, yBase + 16);
+  const yDimLaenge = Math.min(H - 24, yBase + 36);
+  const xDimTrauf = Math.max(10, toSX(0) - 26);
+  const xDimFirst = Math.max(6, toSX(0) - 50);
 
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', display: 'block' }}>
@@ -483,16 +571,16 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
       <line x1={pad.l - 20} y1={toSY(0)} x2={W - pad.r + 10} y2={toSY(0)} stroke="#aaa" strokeWidth={1} strokeDasharray="4,3" />
 
       {/* Giebelwände links + rechts — BAUSEITS (Mauerwerk), grau */}
-      <rect x={toSX(0) - 14} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
-      <rect x={toSX(bldL)} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect data-teil="giebel-links" x={toSX(0) - 14} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
+      <rect data-teil="giebel-rechts" x={toSX(bldL)} y={toSY(ridgeH)} width={14} height={toSY(0) - toSY(ridgeH)} fill="url(#ls-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.2} />
 
       {/* Steher unter der FIRSTPFETTE — Kopf an der Pfetten-Unterkante,
           Länge = member.length (die gerechnete Knicklänge), Fuß auf Deckenebene */}
       {hasFirst && stH > 0 && stuetzPositions.map((sx, i) => (
         <rect
           key={`st-first-${i}`}
-          x={toSX(sx) - 5} y={toSY(ridgeH)}
-          width={10} height={stHpx}
+          x={toSX(sx) - 5} y={yFirstOK + fpH}
+          width={10} height={stLen(yFirstOK + fpH)}
           fill="url(#ls-wood)" stroke="#333" strokeWidth={1}
         />
       ))}
@@ -502,20 +590,20 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
       {hasMittel && stH > 0 && stuetzPositions.map((sx, i) => (
         <rect
           key={`st-mitte-${i}`}
-          x={toSX(sx) - 5} y={toSY(midH2)}
-          width={10} height={stHpx}
+          x={toSX(sx) - 5} y={yMidOK + mpH}
+          width={10} height={stLen(yMidOK + mpH)}
           fill="url(#ls-wood)" stroke="#444" strokeWidth={1}
         />
       ))}
 
-      {/* Firstpfette: nur wenn statisch vorhanden */}
+      {/* Firstpfette: nur wenn statisch vorhanden — Oberkante an der Sparrenunterkante */}
       {hasFirst && (
-        <rect x={toSX(0)} y={toSY(ridgeH) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
+        <rect data-teil="firstpfette" x={toSX(0)} y={yFirstOK} width={toSX(bldL) - toSX(0)} height={fpH} fill="url(#ls-wood)" stroke="#333" strokeWidth={1.2} />
       )}
 
       {/* Mittelpfetten: nur wenn statisch vorhanden (beide auf gleicher Höhe → ein Band) */}
       {hasMittel && (
-        <rect x={toSX(0)} y={toSY(midH2) - 10} width={toSX(bldL) - toSX(0)} height={10} fill="url(#ls-wood)" stroke="#444" strokeWidth={1} />
+        <rect data-teil="mittelpfette" x={toSX(0)} y={yMidOK} width={toSX(bldL) - toSX(0)} height={mpH} fill="url(#ls-wood)" stroke="#444" strokeWidth={1} />
       )}
 
       {/* Zangen/Kehlbalken: liegen quer, im Längsschnitt als Querschnitte an jedem 2. Gespärre */}
@@ -528,8 +616,9 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
         );
       })}
 
-      {/* Fußpfetten / Mauerbank (beidseitig, hintereinander → ein Band) */}
-      <rect x={toSX(0)} y={toSY(eavesH) - 8} width={toSX(bldL) - toSX(0)} height={8} fill="url(#ls-wood)" stroke="#555" strokeWidth={1} />
+      {/* Fußpfetten / Mauerbank (beidseitig, hintereinander → ein Band),
+          Oberkante auf Traufhöhe wie im Querschnitt */}
+      <rect data-teil="fusspfette" x={toSX(0)} y={toSY(eavesH)} width={toSX(bldL) - toSX(0)} height={mbH} fill="url(#ls-wood)" stroke="#555" strokeWidth={1} />
 
       {/* Sparren-Andeutungen (kurze Striche oben) */}
       {Array.from({ length: Math.floor(bldL / 0.8) + 1 }, (_, i) => {
@@ -542,7 +631,7 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
 
       {/* Bemaßungen */}
       {/* Gebäudelänge */}
-      <Dim x1={toSX(0)} y1={toSY(-0.5)} x2={toSX(bldL)} y2={toSY(-0.5)} label={fmt(bldL)} />
+      <Dim mass="laenge" x1={toSX(0)} y1={yDimLaenge} x2={toSX(bldL)} y2={yDimLaenge} label={fmt(bldL)} offset={12} flip />
 
       {/* Stützenfeldweiten (nur wenn es Stützen gibt) */}
       {stuetzPositions.length > 0 && [0, ...stuetzPositions].map((sx, i, arr) => {
@@ -550,47 +639,52 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
         return (
           <Dim
             key={i}
-            x1={toSX(sx)} y1={toSY(-0.25)}
-            x2={toSX(next)} y2={toSY(-0.25)}
+            x1={toSX(sx)} y1={yDimFelder}
+            x2={toSX(next)} y2={yDimFelder}
             label={`L${i + 1}=${fmt(next - sx)}`}
+            offset={12}
             flip
           />
         );
       })}
 
       {/* Pfettenhöhen links */}
-      <Dim x1={toSX(-1.2)} y1={toSY(0)} x2={toSX(-1.2)} y2={toSY(eavesH)} label={fmt(eavesH)} />
-      <Dim x1={toSX(-1.8)} y1={toSY(0)} x2={toSX(-1.8)} y2={toSY(ridgeH)} label={fmt(ridgeH)} />
+      <Dim mass="traufhoehe" x1={xDimTrauf} y1={toSY(0)} x2={xDimTrauf} y2={toSY(eavesH)} label={fmt(eavesH)} />
+      <Dim mass="firsthoehe" x1={xDimFirst} y1={toSY(0)} x2={xDimFirst} y2={toSY(ridgeH)} label={fmt(ridgeH)} />
 
       {/* Labels — nur für tatsächlich gezeichnete Bauteile */}
       {hasFirst && (
         <text x={toSX(bldL / 2)} y={toSY(ridgeH) - 16} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Firstpfette</text>
       )}
       {hasMittel && (
-        <text x={toSX(bldL / 2)} y={toSY(midH2) + 20} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfetten</text>
+        <text x={toSX(bldL / 2)} y={yMidOK + mpH + 14} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Mittelpfetten</text>
       )}
       {(zange || kehl) && (
         <text x={toSX(bldL / 4)} y={toSY(zangenH) - 12} fill="#8a5a2b" fontSize={10} fontFamily="sans-serif" textAnchor="middle">{kehl ? 'Kehlbalken' : 'Zangen'}</text>
       )}
 
       {/* Steher: gezeichnete Länge = gerechnete Länge (Nachweis) */}
-      {stH > 0 && stuetzPositions.length > 0 && (
-        <>
-          <Dim
-            x1={toSX(stuetzPositions[0]) - 14} y1={toSY(hasMittel ? midH2 : ridgeH)}
-            x2={toSX(stuetzPositions[0]) - 14} y2={toSY(hasMittel ? midH2 : ridgeH) + stHpx}
-            label={fmt(stH)} offset={12}
-          />
-          <text
-            x={toSX(stuetzPositions[Math.floor(stuetzPositions.length / 2)])}
-            y={toSY(hasMittel ? midH2 : ridgeH) + stHpx + 13}
-            fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle"
-          >
-            {stQtyTotal} × Steher L = {fmt(stH)} (Fuß auf Deckenebene)
-          </text>
-        </>
-      )}
-      <text x={toSX(bldL / 2)} y={toSY(eavesH) + 18} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Fußpfetten (Mauerbank)</text>
+      {stH > 0 && stuetzPositions.length > 0 && (() => {
+        const top = hasMittel ? yMidOK + mpH : yFirstOK + fpH;
+        const len = stLen(top);
+        return (
+          <>
+            <Dim
+              x1={toSX(stuetzPositions[0]) - 14} y1={top}
+              x2={toSX(stuetzPositions[0]) - 14} y2={top + len}
+              label={fmt(stH)} offset={12}
+            />
+            <text
+              x={toSX(stuetzPositions[Math.floor(stuetzPositions.length / 2)])}
+              y={Math.min(H - 20, top + len + 13)}
+              fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle"
+            >
+              {stQtyTotal} × Steher L = {fmt(stH)} (Fuß auf Deckenebene)
+            </text>
+          </>
+        );
+      })()}
+      <text x={toSX(bldL / 2)} y={toSY(eavesH) + mbH + 14} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">Fußpfetten (Mauerbank)</text>
 
       <text x={W / 2} y={18} fill="#333" fontSize={14} fontFamily="sans-serif" fontWeight="bold" textAnchor="middle">Längsschnitt</text>
     </svg>
@@ -600,17 +694,21 @@ export function Laengsschnitt({ geometry, members }: { geometry: BuildingGeometr
 // ════════════════════════════════════════════════════════════════════════════
 // 3) DETAIL TRAUFE
 // ════════════════════════════════════════════════════════════════════════════
-export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: BuildingGeometry; members: TimberMember[]; roofOverhang?: number }) {
+export function DetailTraufe({ geometry, members, roofOverhang, roofForm }: { geometry: BuildingGeometry; members: TimberMember[]; roofOverhang?: number; roofForm?: string }) {
   const W = 600, H = 400;
 
   const pitchDeg = geometry.roofPitch.value;
-  const pitchRad = (pitchDeg * Math.PI) / 180;
-  // Flach-/Pultdach mit 0° würde sonst durch 0 dividieren; alle Winkelfunktionen
+  // Das Detail zeigt DIESELBE Neigung wie der Querschnitt — die aus Trauf- und
+  // Firsthöhe. Sonst hätte der Zimmerer zwei Blätter mit zwei Winkeln.
+  // Flach-/Pultdach mit 0° würde durch 0 dividieren; alle Winkelfunktionen
   // konsistent aus DEMSELBEN tanA, damit Unterkante, Kervensohle und die
   // Querbemaßung exakt zusammenpassen.
-  const tanA = Math.max(Math.tan(pitchRad), 0.08);
+  const tanRoof = tanAusHoehen(geometry, roofForm);
+  const pitchDrawn = (Math.atan(tanRoof) * 180) / Math.PI;
+  const tanA = Math.max(tanRoof, 0.08);
   const cosA = 1 / Math.sqrt(1 + tanA * tanA);
   const sinA = tanA * cosA;
+  const pitchGezeichnet = (Math.atan(tanA) * 180) / Math.PI;
 
   const sparren = members.find(m => m.type === 'sparren');
   const sparB = sparren ? sparren.width / 1000 : 0.08;   // m — Breite: im Traufschnitt NICHT sichtbar
@@ -672,7 +770,9 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
   const kStossKopf = { x: xStoss, y: pfOK };             // lotrecht hoch, Tiefe t
   const kSohleAus = { x: xStoss + sohleLen, y: pfOK };   // Sohlen-Auslauf, wieder auf der Unterkante
 
-  // Sparren-Umriss MIT ausgeschnittener Kerve (kein aufgelegtes Rechteck)
+  // Sparren-Umriss MIT ausgeschnittener Kerve (kein aufgelegtes Rechteck).
+  // Punkt 0 und 1 sind die durchgehende OBERKANTE — an ihr misst die
+  // Selbstprüfung die gezeichnete Dachneigung nach.
   const sparrenPts: Array<[number, number]> = [
     [xOut, okY(xOut)],                       // OK Traufende
     [xInn, okY(xInn)],                       // OK Richtung First
@@ -709,6 +809,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
           Mauerbank muss der Baumeister waagrecht und höhengerecht herstellen,
           bevor die Zimmerei aufschlägt. */}
       <rect
+        data-teil="mauerkrone"
         x={mxOuter} y={yMauerOK}
         width={mauerB * sc} height={mauerH * sc}
         fill="url(#dt-wood-bauseits)" stroke={BAUSEITS_STROKE} strokeWidth={1.5}
@@ -718,6 +819,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
 
       {/* Mauerbank (Fußpfette) — liegt AUF der Mauerkrone */}
       <rect
+        data-teil="mauerbank"
         x={pfX} y={pfOK}
         width={pfetteB * sc} height={pfetteH * sc}
         fill="url(#dt-wood)" stroke="#333" strokeWidth={1.5}
@@ -739,6 +841,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
 
       {/* Sparren mit Kerve — EIN Umriss, die Kerve ist ausgeschnitten */}
       <polygon
+        data-teil="sparren"
         points={sparrenPts.map(p => `${p[0]},${p[1]}`).join(' ')}
         fill="url(#dt-wood)" stroke="#333" strokeWidth={1.5}
       />
@@ -746,7 +849,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
         const lx = (kSohleAus.x + xInn) / 2, ly = okY((kSohleAus.x + xInn) / 2) - 24;
         return (
           <text x={lx} y={ly} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle"
-                transform={`rotate(${-pitchDeg},${lx},${ly})`}>
+                transform={`rotate(${-pitchGezeichnet},${lx},${ly})`}>
             Sparren {sparren ? (sparren.crossSection ?? `${sparren.width}/${sparren.height}`) : ''}
           </text>
         );
@@ -813,6 +916,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
       <line x1={mxOuter} y1={yMauerOK} x2={mxOuter} y2={yUeberDim + 8} stroke="#aaa" strokeWidth={0.7} strokeDasharray="3,3" />
       <line x1={xOut} y1={ukY(xOut)} x2={xOut} y2={yUeberDim + 8} stroke="#aaa" strokeWidth={0.7} strokeDasharray="3,3" />
       <Dim
+        mass="ueberstand"
         x1={mxOuter} y1={yUeberDim}
         x2={xOut} y2={yUeberDim}
         label={`Üst. ${fmt(ueberstand)}`}
@@ -847,6 +951,10 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
       </g>
 
       <text x={W / 2} y={18} fill="#333" fontSize={14} fontFamily="sans-serif" fontWeight="bold" textAnchor="middle">Detail Traufe</text>
+      {/* Die gezeichnete Neigung offen anschreiben — inkl. Widerspruch zum Plan */}
+      <text x={W / 2} y={32} fill="#555" fontSize={10} fontFamily="sans-serif" textAnchor="middle">
+        Dachneigung {neigungsText(pitchDrawn, pitchDeg)}
+      </text>
     </svg>
   );
 }
@@ -854,7 +962,7 @@ export function DetailTraufe({ geometry, members, roofOverhang }: { geometry: Bu
 // ════════════════════════════════════════════════════════════════════════════
 // EXPORT: SchnittViews
 // ════════════════════════════════════════════════════════════════════════════
-export function SchnittViews({ geometry, roofForm: _roofForm, members, coveringName, roofOverhang }: SchnittViewsProps) {
+export function SchnittViews({ geometry, roofForm, members, coveringName, roofOverhang }: SchnittViewsProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -872,17 +980,17 @@ export function SchnittViews({ geometry, roofForm: _roofForm, members, coveringN
           </TabsList>
           <TabsContent value="querschnitt">
             <div className="overflow-x-auto">
-              <Querschnitt geometry={geometry} members={members} coveringName={coveringName} roofForm={_roofForm} roofOverhang={roofOverhang} />
+              <Querschnitt geometry={geometry} members={members} coveringName={coveringName} roofForm={roofForm} roofOverhang={roofOverhang} />
             </div>
           </TabsContent>
           <TabsContent value="laengsschnitt">
             <div className="overflow-x-auto">
-              <Laengsschnitt geometry={geometry} members={members} />
+              <Laengsschnitt geometry={geometry} members={members} roofForm={roofForm} />
             </div>
           </TabsContent>
           <TabsContent value="traufe">
             <div className="overflow-x-auto">
-              <DetailTraufe geometry={geometry} members={members} roofOverhang={roofOverhang} />
+              <DetailTraufe geometry={geometry} members={members} roofOverhang={roofOverhang} roofForm={roofForm} />
             </div>
           </TabsContent>
         </Tabs>

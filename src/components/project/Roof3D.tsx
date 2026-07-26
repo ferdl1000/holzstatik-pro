@@ -79,7 +79,7 @@ const COLORS = {
 } as const;
 
 // ─── Visual Building Block ─────────────────────────────────────────────────────
-interface BoxData {
+export interface BoxData {
   key: string;
   memberId: string;
   memberName: string;
@@ -107,7 +107,12 @@ interface BoxData {
  * yTopRidge = Oberkante Sparren am First, tan = Steigung, hV = vertikale Sparrendicke.
  * kerven: talseitige Stoßkanten [zStoss] (zwischen zRidge und zEave).
  */
-function sparrenProfil(
+export function kervenTiefe(hV: number, tan: number): number {
+  // Kerventiefe ≤ h/4 (Zimmererregel), mindestens 2 cm, mit der Neigung wachsend.
+  return Math.max(0.02, Math.min(hV / 4, 0.35 * tan + 0.01));
+}
+
+export function sparrenProfil(
   zRidge: number, zEave: number, yTopRidge: number, tan: number, hV: number,
   kerven: number[],
 ): [number, number][] {
@@ -126,7 +131,7 @@ function sparrenProfil(
   P(zr, yu(zr) + fase);
   P(zr - fase, yu(zr - fase));
   // Unterkante zurück Richtung First, mit Kerven (talseitige zuerst)
-  const t = Math.max(0.02, Math.min(hV / 4, 0.35 * tan + 0.01)); // Kerventiefe ≤ h/4
+  const t = kervenTiefe(hV, tan);
   const sorted = kerven
     .map(z => Math.abs(z - zRidge))
     .filter(dz => dz > t / Math.max(tan, 0.08) + 0.05 && dz < zr - fase - 0.05)
@@ -163,7 +168,7 @@ function ProfileMesh({ b, isSelected, onClick }: { b: BoxData; isSelected: boole
   );
 }
 
-function buildPartBoxes(
+export function buildPartBoxes(
   part: RoofPart,
   offsetX: number,
   offsetZ: number,
@@ -177,11 +182,19 @@ function buildPartBoxes(
   const eavesHeight = Math.max(0.5, geometry.eavesHeight || 4);
   const rise = Math.max(0.1, ridgeHeight - eavesHeight);
   const halfWidth = width / 2;
-  const sparrenLen = Math.sqrt(halfWidth * halfWidth + rise * rise);
-  const angle = Math.atan2(rise, halfWidth);
   const isPultdach = form === 'pultdach';
   const isFlachdach = form === 'flachdach';
   const isWalm = form === 'walmdach' || form === 'krueppelwalmdach';
+  // Waagrechte Sparrenprojektion („Lauf"): beim Satteldach die halbe Breite, beim
+  // Pultdach die VOLLE Breite. Nur mit dem richtigen Lauf ergibt sich aus
+  // ridgeHeight = eavesHeight + tan(α)·Lauf wieder GENAU die Plan-Neigung α —
+  // vorher wurde beim Pultdach mit der halben Breite gerechnet und das Bild zeigte
+  // die doppelte Neigung.
+  const lauf = isPultdach ? width : halfWidth;
+  const tanDach = rise / lauf;
+  const angle = Math.atan(tanDach);
+  /** Sparrenlänge aus der Geometrie (ohne Dachüberstand) */
+  const sparrenLen = Math.sqrt(lauf * lauf + rise * rise);
   const isVordach = part.kind === 'vordach';
   const wallOpacity = isVordach ? 0.12 : 0.25;
   const wallColor = isVordach ? '#d0c4b0' : COLORS.wall;
@@ -219,6 +232,32 @@ function buildPartBoxes(
   const leimbinderList = members.filter(m => m.type === 'leimbinder');
   const kopfbandList = members.filter(m => m.type === 'rahm');
 
+  // ── EINE gemeinsame Sparrenebene für ALLES ────────────────────────────────
+  // Die Sparren-OBERKANTE ist die Dachfläche: sie läuft durch den Firstpunkt
+  // (0 | ridgeHeight) und den Traufpunkt (±B/2 | eavesHeight). Jede Pfette, jeder
+  // Dachaufbau und jede Steherhöhe wird aus DIESER Ebene abgeleitet — sonst zeigt
+  // das Bild eine andere Konstruktion, als bemessen wurde.
+  const sparH = (sparrenList[0]?.height ?? 160) / 1000;
+  const cosA = Math.max(Math.cos(angle), 0.5);
+  /** ECHTER cos(α) — nur für die Umrechnung Schräge → Waagrechte. Der gekappte
+   *  cosA taugt dafür nicht: ab ca. 60° käme sonst ein zu langer Überstand heraus
+   *  und der gezeichnete Sparren wäre länger als der bestellte. */
+  const cosSchraeg = Math.max(Math.cos(angle), 1e-3);
+  /** lotrechte Sparrendicke (Querschnittshöhe in der Senkrechten gemessen) */
+  const hVSparren = sparH / cosA;
+  /** Querlage des höchsten Sparrenpunktes (Satteldach: Mitte, Pultdach: Hochseite) */
+  const zFirst = isFlachdach ? -halfWidth - 0.3 : isPultdach ? -halfWidth : 0;
+  /** Neigung, mit der das Sparrenprofil gezeichnet wird (Flachdach: Mindestgefälle) */
+  const tanProfil = isFlachdach ? 0.03 : tanDach;
+  /** Sparren-Oberkante am First (Flachdach: Sparren liegt AUF der Mauerkrone) */
+  const yTopFirst = isFlachdach ? eavesHeight + sparH : ridgeHeight;
+  /** Kerventiefe — dieselbe, die sparrenProfil in den Sparren schneidet */
+  const tKerve = kervenTiefe(hVSparren, tanProfil);
+  /** Oberkante Sparren (= Dachfläche) über der Querlage z */
+  const okSparren = (z: number) => yTopFirst - Math.abs(z - zFirst) * tanProfil;
+  /** Unterkante Sparren über der Querlage z */
+  const ukSparren = (z: number) => okSparren(z) - hVSparren;
+
   // Hallenbinder-Raster: die beiden äußeren Binder liegen auf den Giebelachsen,
   // dazwischen im gerechneten Achsabstand L/(n−1) — genau so ist die Stückzahl in
   // autoMembers hergeleitet (traegerCount = ceil(L / Achsabstand) + 1). Nur mit
@@ -239,13 +278,17 @@ function buildPartBoxes(
       // Pultdach: durchgehender Sparren mit Kerven auf beiden Mauerbänken +
       // ggf. Mittelpfette, Zierschnitt am tiefen Traufende.
       const spacing = length / qty;
-      const pultTan = rise / width;
-      const hV = h / Math.max(Math.cos(Math.atan2(rise, width)), 0.5);
+      const hV = h / cosA;
       const kervenZ: number[] = [];
       if (fussPfetten.length > 0) { kervenZ.push(-(halfWidth - 0.09)); kervenZ.push(halfWidth - 0.09); }
       const midListPult = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
-      if (midListPult.length > 0) kervenZ.push(0.05);
-      const profile = sparrenProfil(-halfWidth, halfWidth + 0.4, ridgeHeight, pultTan, hV, kervenZ);
+      if (midListPult.length > 0) kervenZ.push((midListPult[0]?.width ?? 100) / 2000);
+      // Der Überstand ist die Differenz zwischen bemessener Sparrenlänge und
+      // reiner Dachflächenlänge — sonst zeigt das Bild eine andere Länge als die
+      // Bauteilliste. Er wird am TIEFEN Ende angetragen, damit die Oberkante am
+      // Hochpunkt exakt auf Firsthöhe bleibt.
+      const ovRun = Math.max(0, (sLen - sparrenLen) * cosSchraeg);
+      const profile = sparrenProfil(zFirst, halfWidth + ovRun, yTopFirst, tanProfil, hV, kervenZ);
       for (let i = 0; i < qty; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         add({ key: `${partId}-spr-${sm.id}-${i}`, memberId: sm.id, memberName: sm.name,
@@ -256,10 +299,9 @@ function buildPartBoxes(
       // Flachdach: durchgehender Sparren mit leichtem Gefälle, Kerven auf beiden
       // Mauerbänken, lotrechte Enden mit Zierschnitt.
       const spacing = length / qty;
-      const flatTan = 0.03;
       const hVFlat = h;
       const kervenFlat: number[] = fussPfetten.length > 0 ? [-(halfWidth - 0.09), halfWidth - 0.09] : [];
-      const profileFlat = sparrenProfil(-halfWidth - 0.3, halfWidth + 0.3, eavesHeight + hVFlat, flatTan, hVFlat, kervenFlat);
+      const profileFlat = sparrenProfil(zFirst, halfWidth + 0.3, yTopFirst, tanProfil, hVFlat, kervenFlat);
       for (let i = 0; i < qty; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         add({ key: `${partId}-spr-${sm.id}-${i}`, memberId: sm.id, memberName: sm.name,
@@ -271,8 +313,8 @@ function buildPartBoxes(
       // Enden vereinfachte Schifter (Detail-Schifterschnitte: siehe Abbundliste).
       const perLongSide = Math.ceil(qty * 0.7 / 2);  // 70% auf Längsseiten
       const longSpacing = length / perLongSide;
-      const midY = (eavesHeight + ridgeHeight) / 2;
-      const hVW = h / Math.max(Math.cos(angle), 0.5);
+      const hVW = h / cosA;
+      const ovRunW = Math.max(0, (sLen - sparrenLen) * cosSchraeg);
       const kervenW: number[] = [];
       if (fussPfetten.length > 0) kervenW.push(halfWidth - 0.09);
       const midListW = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
@@ -280,7 +322,7 @@ function buildPartBoxes(
       for (let i = 0; i < perLongSide; i++) {
         const x = -length / 2 + (i + 0.5) * longSpacing;
         for (const side of [-1, 1] as const) {
-          const profileW = sparrenProfil(0, side * (halfWidth + 0.25), ridgeHeight, rise / halfWidth, hVW, kervenW.map(z => side * z));
+          const profileW = sparrenProfil(0, side * (halfWidth + ovRunW), ridgeHeight, tanDach, hVW, kervenW.map(z => side * z));
           add({ key: `${partId}-spr-${sm.id}-long-${i}-${side}`, memberId: sm.id, memberName: sm.name,
                 pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
                 dims: [b, h, sparrenLen], color, profile: profileW, profileDepth: b });
@@ -310,8 +352,10 @@ function buildPartBoxes(
       // Kerve auf Mauerbank + Mittelpfette, Zierschnitt am Sparrenende.
       const perSide = Math.ceil(qty / 2);
       const spacing = length / perSide;
-      const hV = h / Math.max(Math.cos(angle), 0.5);
-      const overhangH = Math.max(0.25, ((sLen || sparrenLen) - sparrenLen) * Math.cos(angle));
+      const hV = h / cosA;
+      // Dachüberstand = bemessene Sparrenlänge − Dachflächenlänge. KEIN Mindestwert:
+      // sonst wäre der gezeichnete Sparren länger als der bestellte.
+      const overhangH = Math.max(0, (sLen - sparrenLen) * cosSchraeg);
       const kervenZ: number[] = [];
       if (fussPfetten.length > 0) kervenZ.push(halfWidth - 0.09);
       const midListS = mittelPfetten.length > 0 ? mittelPfetten : otherPfetten;
@@ -319,7 +363,7 @@ function buildPartBoxes(
       for (let i = 0; i < perSide; i++) {
         const x = -length / 2 + (i + 0.5) * spacing;
         for (const side of [-1, 1] as const) {
-          const profile = sparrenProfil(0, side * (halfWidth + overhangH), ridgeHeight, rise / halfWidth, hV, kervenZ.map(z => side * z));
+          const profile = sparrenProfil(zFirst, side * (halfWidth + overhangH), yTopFirst, tanProfil, hV, kervenZ.map(z => side * z));
           add({ key: `${partId}-spr-${sm.id}-${i}-${side}`, memberId: sm.id, memberName: sm.name,
                 pos: [x + b / 2, 0, 0], rot: [0, -Math.PI / 2, 0],
                 dims: [b, h, sLen || sparrenLen], color, profile, profileDepth: b });
@@ -329,11 +373,9 @@ function buildPartBoxes(
   }
 
   // ZIMMERER-GEOMETRIE: Pfetten liegen UNTER der Sparrenlage (Sparren ruhen auf
-  // ihnen), niemals außen auf den Sparren. Abstand Sparrenachse → Unterkante
-  // entlang der Vertikalen: (h_Sparren/2) / cos(α).
-  const sparH = (sparrenList[0]?.height ?? 160) / 1000;
-  const cosA = Math.max(Math.cos(angle), 0.5);
-  const underRafter = (sparH / 2) / cosA;
+  // ihnen), niemals außen auf den Sparren. Bezug ist die SPARREN-UNTERKANTE
+  // (ukSparren), nicht die Sparrenachse — sonst stünde die Pfette um die halbe
+  // Sparrenhöhe im Sparren drin und der Sparren „hinge" über dem First.
   const midY = (eavesHeight + ridgeHeight) / 2;
 
   // Auflagerreihen für die Steher: eine Reihe je WIRKLICH vorhandener Pfettenreihe
@@ -351,7 +393,9 @@ function buildPartBoxes(
       ? (form === 'krueppelwalmdach' ? length * 0.7 : Math.max(0.1, length - width))
       : length;
     const fpH = fp.height / 1000;
-    const y = ridgeHeight - underRafter - fpH / 2;
+    // Oberkante Firstpfette = Unterkante Sparren an der Firstlinie: der Sparren
+    // liegt auf, ohne Lücke und ohne Durchdringung.
+    const y = ukSparren(0) - fpH / 2;
     addReihe(y - fpH / 2, 0);
     add({ key: `${partId}-fp-${fp.id}`, memberId: fp.id, memberName: fp.name,
           pos: [0, y, 0], rot: [0, 0, 0],
@@ -368,11 +412,14 @@ function buildPartBoxes(
   let midPfettenY: number | null = null;
   midPfetten.forEach((mp, idx) => {
     const mpH = mp.height / 1000;
+    const mpB = mp.width / 1000;
     const side = idx % 2 === 0 ? -1 : 1;
     // Pultdach/Flachdach: Pfette mittig unter dem durchgehenden Sparren
     const z = (isPultdach || isFlachdach) ? 0 : (side * halfWidth) / 2;
-    const yAxis = isFlachdach ? eavesHeight : (isPultdach ? eavesHeight + rise / 2 : midY);
-    const y = yAxis - underRafter - mpH / 2;
+    // Talseitige Kervenkante — dort liegt die Kervensohle auf der Pfettenoberkante
+    // auf (dieselbe Kante, an der sparrenProfil die Kerve ausschneidet).
+    const zStoss = z + (z < 0 ? -1 : 1) * mpB / 2;
+    const y = ukSparren(zStoss) + tKerve - mpH / 2;
     midPfettenY = y;
     addReihe(y - mpH / 2, z);
     add({ key: `${partId}-mp-${mp.id}`, memberId: mp.id, memberName: mp.name,
@@ -382,14 +429,21 @@ function buildPartBoxes(
   });
 
   // === Fußpfetten / Mauerbank — AUF der Mauerkrone (innenbündig), nicht in der Wand ===
-  fussPfetten.forEach((fp, idx) => {
-    const side = idx % 2 === 0 ? -1 : 1;
+  // autoMembers legt BEIDE Mauerbänke als EIN Bauteil „Fußpfette 1-2" mit
+  // quantity = 2 an. Wird je Bauteil nur ein Balken gezeichnet, fehlt im Bild die
+  // zweite Traufseite — deshalb hier nach Stückzahl auf die Traufseiten verteilen.
+  let fussIdx = 0;
+  for (const fp of fussPfetten) {
     const fpH = fp.height / 1000;
-    add({ key: `${partId}-fusp-${fp.id}`, memberId: fp.id, memberName: fp.name,
-          pos: [0, eavesHeight + fpH / 2, side * (halfWidth - 0.15)], rot: [0, 0, 0],
-          dims: [length, fpH, fp.width / 1000],
-          color: utilizationColor(utilizations[fp.id]) });
-  });
+    const kopien = Math.min(2, Math.max(1, fp.quantity));
+    for (let k = 0; k < kopien; k++) {
+      const side = fussIdx++ % 2 === 0 ? -1 : 1;
+      add({ key: `${partId}-fusp-${fp.id}-${k}`, memberId: fp.id, memberName: fp.name,
+            pos: [0, eavesHeight + fpH / 2, side * (halfWidth - 0.15)], rot: [0, 0, 0],
+            dims: [length, fpH, fp.width / 1000],
+            color: utilizationColor(utilizations[fp.id]) });
+    }
+  }
 
   // === Hallen-Längspfetten — im gerechneten Raster: je Feld zwischen zwei
   //     Hauptträgern und je Dachfläche n Stück, nicht EIN durchlaufender Balken ===
@@ -435,7 +489,7 @@ function buildPartBoxes(
     const stH = st.length || (ridgeHeight - 0.5);
     const reihen = pfettenReihen.length > 0
       ? pfettenReihen
-      : [{ topY: ridgeHeight - underRafter, z: 0 }];
+      : [{ topY: ukSparren(0), z: 0 }];
     const proReihe = Math.max(1, Math.ceil(qty / reihen.length));
     const spacing = length / (proReihe + 1);
     const baseY = Math.min(...reihen.map(r => r.topY)) - stH; // gemeinsame Fußpunkt-Ebene
@@ -455,14 +509,16 @@ function buildPartBoxes(
   if (sparrenList.length > 0 && !isWalm) {
     const deckName = 'Dachaufbau (Kaltdach): Vollschalung 2,4 cm + Abdichtung + Konterlattung 5/8 + Lattung 3/5';
     const deckThick = 0.11; // 2,4 Schalung + 5 Konterlatte + 3 Lattung ≈ 11 cm
-    const liftUp = (sparH / 2 + deckThick / 2) / cosA;
+    // Der Aufbau liegt AUF der Sparren-Oberkante (= Dachfläche), nicht über der
+    // Sparrenachse — sonst schwebt die Dachhaut eine halbe Sparrenhöhe über dem Holz.
+    const liftUp = (deckThick / 2) / cosA;
     if (isPultdach) {
       add({ key: `${partId}-deck`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
-            pos: [0, eavesHeight + rise / 2 + liftUp, 0], rot: [Math.atan2(rise, width), 0, 0],
-            dims: [length, deckThick, Math.sqrt(width * width + rise * rise)], opacity: 0.45, transparent: true });
+            pos: [0, eavesHeight + rise / 2 + liftUp, 0], rot: [angle, 0, 0],
+            dims: [length, deckThick, sparrenLen], opacity: 0.45, transparent: true });
     } else if (isFlachdach) {
       add({ key: `${partId}-deck`, memberId: '', memberName: deckName, color: COLORS.deck ?? '#b5651d',
-            pos: [0, eavesHeight + sparH / 2 + deckThick / 2, 0], rot: [0.03, 0, 0],
+            pos: [0, eavesHeight + sparH + deckThick / 2, 0], rot: [0.03, 0, 0],
             dims: [length, deckThick, width], opacity: 0.45, transparent: true });
     } else {
       for (const side of [-1, 1] as const) {

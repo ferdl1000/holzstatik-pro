@@ -93,9 +93,62 @@ export function OverviewTab({ project, onUpdate, onNavigate }: OverviewTabProps)
   }
 
   const pruefung = project.autoRun?.gegenpruefung;
+  const kopf = project.planHeader;
+  const bauadr = kopf?.bauadresse;
+  const adrZeile = [
+    [bauadr?.strasse, bauadr?.hausnummer].filter(Boolean).join(' '),
+    [bauadr?.plz, bauadr?.ort].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ');
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
+      {/* Plankopf — wer baut, wer geplant hat, wo gebaut wird. Ohne diese drei
+          Angaben ist ein Einreichplan nicht eindeutig identifiziert, und die
+          Bauadresse entscheidet über Schneezone und Seehöhe. */}
+      {(kopf || project.address) && (
+        <div className="rounded-lg border bg-muted/20 p-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Bauvorhaben</p>
+              <p className="font-medium">{kopf?.bauvorhaben || project.name}</p>
+              {kopf?.bauherr?.name && <p className="text-xs text-muted-foreground mt-0.5">Bauherr: {kopf.bauherr.name}</p>}
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Bauadresse</p>
+              <p className="font-medium">
+                {adrZeile || [project.address?.street, project.address?.houseNumber].filter(Boolean).join(' ')
+                  || [project.address?.postalCode, project.address?.city].filter(Boolean).join(' ')
+                  || '— nicht erkannt —'}
+              </p>
+              {!adrZeile && project.address?.postalCode && (
+                <p className="text-xs text-muted-foreground mt-0.5">{project.address.postalCode} {project.address.city}</p>
+              )}
+              {(bauadr?.katastralgemeinde || bauadr?.grundstueck) && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {bauadr.katastralgemeinde && `KG ${bauadr.katastralgemeinde}`}
+                  {bauadr.katastralgemeinde && bauadr.grundstueck && ' · '}
+                  {bauadr.grundstueck && `Gst. ${bauadr.grundstueck}`}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Planverfasser</p>
+              <p className="font-medium">{kopf?.planverfasser?.buero || kopf?.planverfasser?.name || '—'}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {[kopf?.planNummer && `Plan ${kopf.planNummer}`, kopf?.planDatum, kopf?.massstab && `M ${kopf.massstab}`]
+                  .filter(Boolean).join(' · ') || '—'}
+              </p>
+            </div>
+          </div>
+          {!project.address?.postalCode && (
+            <p className="text-xs mt-3 text-[hsl(var(--status-yellow))]">
+              Keine Bauadresse aus dem Plan gelesen — bitte im Reiter „Adresse" eintragen.
+              Schneezone und Seehöhe hängen daran, und damit jeder Querschnitt.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Gegenprüfung gegen den Einreichplan — steht GANZ OBEN, weil ein
           Widerspruch zwischen Plan, Berechnung und Zeichnung das ganze
           Ergebnis unbrauchbar macht. */}

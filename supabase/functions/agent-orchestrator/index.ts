@@ -487,6 +487,46 @@ serve(async (req) => {
 
     if (addrResult.ok && addrResult.data.address) projectUpdate.address = addrResult.data.address;
 
+    // === Plankopf (Schriftfeld) — Bauherr, Planverfasser, Bauadresse ===
+    // Der Plankopf ist die zuverlässigste Quelle für die BAUADRESSE, und die
+    // Bauadresse entscheidet über Schneezone und Seehöhe — also über jeden
+    // Querschnitt. Sie hat deshalb Vorrang vor dem allgemeinen Adress-Agenten,
+    // der aus einer Textliste raten muss und dabei schon die Büroadresse des
+    // Planverfassers erwischt hat.
+    const ph = extracted.planHeader as Record<string, any> | undefined;
+    if (ph && typeof ph === 'object') {
+      projectUpdate.planHeader = ph;
+      const ba = (ph.bauadresse ?? {}) as Record<string, string>;
+      const plz = (ba.plz ?? '').trim();
+      const ort = (ba.ort ?? '').trim();
+      if (/^\d{4}$/.test(plz) && ort.length > 1) {
+        const bestehend = projectUpdate.address as Record<string, any> | undefined;
+        const bisherigeKonfidenz = Number(bestehend?.confidence ?? 0);
+        const kopfKonfidenz = Math.max(0.8, Number(ph.confidence ?? 0.8));
+        if (!bestehend || bisherigeKonfidenz < kopfKonfidenz) {
+          projectUpdate.address = {
+            ...(bestehend ?? {}),
+            street: (ba.strasse ?? '').trim(),
+            houseNumber: (ba.hausnummer ?? '').trim(),
+            postalCode: plz,
+            city: ort,
+            country: 'Österreich',
+            confidence: kopfKonfidenz,
+            source: 'auto_extracted',
+            alternatives: [],
+            evidence: ph.evidence ?? 'Plankopf/Schriftfeld',
+          };
+          log.push(`✓ Bauadresse aus dem Plankopf: ${plz} ${ort}${ba.strasse ? ', ' + ba.strasse : ''}${ba.grundstueck ? ' (Gst. ' + ba.grundstueck + ')' : ''}`);
+        }
+      } else {
+        log.push('⚠ Plankopf gelesen, aber keine verwertbare Bauadresse (PLZ + Ort) gefunden');
+      }
+      if (ph.bauherr?.name) log.push(`✓ Bauherr: ${ph.bauherr.name}`);
+      if (ph.planverfasser?.buero || ph.planverfasser?.name) {
+        log.push(`✓ Planverfasser: ${ph.planverfasser.buero || ph.planverfasser.name}`);
+      }
+    }
+
     // Geometrie aus Extraktion
     const dims = (extracted.dimensions || []) as Array<{label?: string; value: number; confidence: number}>;
     const find = (label: string) => dims.find(d => d.label?.toLowerCase().includes(label));

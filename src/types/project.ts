@@ -94,11 +94,38 @@ export interface Project {
   planMemberSections?: { member: 'sparren' | 'pfette' | 'stuetze' | 'kehlbalken'; b: number; h: number; raw: string }[];
   /** Dachüberstand in m (aus Plan gelesen oder Default 0,4) — geht in Dachfläche + Sparrenlänge ein */
   roofOverhang?: number;
+  /** Schriftfeld des Einreichplans — damit der Plan eindeutig identifiziert ist:
+   *  wer der Bauherr ist, wer geplant hat, und wo gebaut wird. Die Bauadresse
+   *  daraus entscheidet über Schneezone und Seehöhe. */
+  planHeader?: PlanHeader;
   /** Ergebnis des letzten Auto-Laufs. Wird mitgespeichert, damit Annahmen,
    *  Angebotssumme und die Begründung des Varianten-Vergleichs einen Reload
    *  überleben — vorher lagen sie nur im Komponenten-State und waren nach dem
    *  Neuladen der Seite weg. */
   autoRun?: PersistedAutoRun;
+}
+
+/**
+ * Angaben aus dem Schriftfeld (Plankopf) eines österreichischen Einreichplans.
+ *
+ * WICHTIG: Die Adresse des Planverfassers ist NICHT die Bauadresse. Im
+ * Schriftfeld stehen beide oft untereinander — verwechselt man sie, rechnet die
+ * Statik mit der falschen Schneezone.
+ */
+export interface PlanHeader {
+  bauvorhaben?: string;
+  bauherr?: { name?: string; adresse?: string };
+  planverfasser?: { buero?: string; name?: string; adresse?: string };
+  bauadresse?: {
+    strasse?: string; hausnummer?: string; plz?: string; ort?: string;
+    katastralgemeinde?: string; grundstueck?: string;
+  };
+  planNummer?: string;
+  planDatum?: string;
+  massstab?: string;
+  /** Wörtliches Zitat aus dem Schriftfeld, damit man es am Plan nachschlagen kann */
+  evidence?: string;
+  confidence?: number;
 }
 
 /** Persistierter Auszug eines Pipeline-Laufs (bewusst strukturell definiert,
