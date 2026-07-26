@@ -62,7 +62,17 @@ export function Visual3DTab({ project }: Visual3DTabProps) {
         roofParts={roofParts}
         utilizations={utilizations}
       />
-      <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} geom={{ buildingWidth: g.width.value || 8, overhang: project.roofOverhang ?? 0.4, hasMittelpfette: (project.members ?? []).some(m => m.type === 'pfette' && /mittel/i.test(m.name)) }} />
+      <AbbundOverview members={project.members ?? []} roofPitchDeg={g.roofPitch.value ?? 30} geom={{
+        buildingWidth: g.width.value || 8,
+        overhang: project.roofOverhang ?? 0.4,
+        hasMittelpfette: (project.members ?? []).some(m => m.type === 'pfette' && /mittel/i.test(m.name)),
+        // Beim Pultdach spannt der Sparren über die VOLLE Breite — danach richtet
+        // sich, wo die Mittelpfetten-Kerve sitzt.
+        isPultdach: project.roofType?.form === 'pultdach',
+        // Auflagerbreite der Pfette aus der echten Bauteilliste: sie bestimmt
+        // Länge und damit Tiefe der Kerve.
+        pfettenBreite: (project.members ?? []).find(m => m.type === 'pfette')?.width ?? 120,
+      }} />
       <div className="mt-4">
         <SchnittViews
           geometry={g}

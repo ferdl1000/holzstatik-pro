@@ -76,7 +76,29 @@ const ProjectView = () => {
     if (data) {
       setDbProject(data);
       const pd = (data.project_data as any) || {};
-      const loaded: Project = { ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name, description: data.description || '' };
+      // Die hochgeladenen Pläne stehen in einer eigenen Tabelle, nicht in
+      // project_data. Die Prüfliste sucht sie aber unter project.documents und
+      // meldete deshalb "Kein Plan hochgeladen", obwohl ein analysierter Plan
+      // im Projekt lag. Hier werden sie zusammengeführt.
+      const { data: docs } = await supabase
+        .from('documents')
+        .select('id, file_name, status, created_at, extracted_data')
+        .eq('project_id', id!)
+        .order('created_at', { ascending: false });
+      const dokumente = (docs ?? []).map((d: any) => ({
+        id: d.id,
+        fileName: d.file_name,
+        fileType: 'application/pdf',
+        uploadedAt: d.created_at,
+        status: (d.status ?? 'uploaded') as 'uploaded' | 'processing' | 'analyzed' | 'error',
+        pages: 1,
+        ...(d.extracted_data ? { extractedData: d.extracted_data } : {}),
+      }));
+      const loaded: Project = {
+        ...EMPTY_PROJECT, ...pd, id: data.id, name: data.name,
+        description: data.description || '',
+        ...(dokumente.length > 0 ? { documents: dokumente } : {}),
+      };
       setProject(loaded);
       // Statik-Modell automatisch ableiten, wenn Basis-Daten da sind aber Bauteile/Lasten fehlen.
       // So zeigen ALLE Reiter (Tragwerk, Lasten, Berechnung, Kosten, Bauphysik, Werkstatt …)

@@ -20,6 +20,11 @@ export interface AbbundGeom {
   stuetzenProPfette?: number;
   /** Kopfbänder (type 'rahm') sind im gewählten Tragsystem wirklich vorhanden */
   hasKopfband?: boolean;
+  /** Pultdach: der Sparren spannt über die VOLLE Gebäudebreite, nicht die halbe.
+   *  Danach richtet sich, wo die Mittelpfetten-Kerve sitzt. */
+  isPultdach?: boolean;
+  /** Auflagerbreite der Pfette [mm] — bestimmt Länge und Tiefe der Kerve */
+  pfettenBreite?: number;
 }
 export interface AbbundDetailsProps {
   member: TimberMember;
@@ -113,16 +118,35 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
   // OBERKANTE den Firstpunkt, die Unterkante endet um h·tanα früher.
   const tanA = Math.max(Math.tan((alpha * Math.PI) / 180), 0.09);
   const slant = drawH * tanA;                    // Schmiegen-Versatz über die Balkenhöhe
-  const tPix = Math.min(h / 4, 40) * scale * 3;  // Kerventiefe ≤ h/4 (gleiche Überhöhung wie drawH)
+
+  // ── KERVE: Tiefe folgt aus der Auflagerbreite der Pfette, nicht umgekehrt ──
+  // Die Kervensohle ist waagrecht und genau so lang, wie die Pfette breit ist —
+  // sie sitzt ja auf der Pfette. Daraus folgt die Tiefe: t = Auflagerbreite · tan α.
+  // Vorher war es andersherum (t fix 40 mm, Sohle = t/tan α). Bei flachen Dächern
+  // ergab das Unsinn: bei 5° lief die Sohle über 457 mm aus — bei einer 120 mm
+  // breiten Pfette. Die beiden Kerven fraßen dadurch das linke Drittel des
+  // Sparrens auf und er sah aus, als würde er auslaufen.
+  const tanReal = Math.tan((alpha * Math.PI) / 180);
+  const pfettenBreiteMM = geom?.pfettenBreite ?? 120;
+  const kerveTiefeMM = Math.min(h / 4, 40, pfettenBreiteMM * tanReal);
+  // Unter ~2° schneidet der Zimmerer keine Kerve mehr — der Sparren liegt flach
+  // auf und wird nur verankert.
+  const kerveNoetig = alpha >= 2 && kerveTiefeMM >= 5;
+  const tPix = kerveTiefeMM * scale * 3;         // gleiche Überhöhung wie drawH
   const slantT = tPix * tanA;                    // Stoß-Versatz über die Kerventiefe
-  const sohleLen = tPix / tanA;                  // Sohlen-Auslauf: waagrecht verbaut → fällt im Anriss um tanα
+  const sohleLen = pfettenBreiteMM * scale;      // Sohle = Auflagerbreite der Pfette
   const yT = startY, yB = startY + drawH;
+
   // Kervenpositionen (Stoß-Fußpunkt) entlang der Unterkante aus der ECHTEN
-  // Geometrie: Fußpfette nach dem Überstand; Mittelpfette (falls vorhanden)
-  // auf halber horizontaler Sparrenweite, umgerechnet auf die Schräge.
+  // Geometrie: Fußpfette nach dem Überstand; Mittelpfette auf halber
+  // Sparren-Stützweite. Beim SATTELDACH spannt der Sparren über die halbe
+  // Gebäudebreite (Mittelpfette also bei B/4), beim PULTDACH über die volle
+  // (Mittelpfette bei B/2). Vorher wurde immer B/4 gerechnet — beim Pultdach
+  // saß die Kerve dadurch bei 28 % statt bei 50 % der Sparrenlänge.
   const xFuss = startX + ueberstand * scale;
   const hatMittelpfette = geom?.hasMittelpfette ?? false;
-  const mitteSlopeMM = ((geom?.buildingWidth ?? 8) / 4) * 1000 / cosAReal;
+  const spannweiteMM = (geom?.buildingWidth ?? 8) * 1000 * (geom?.isPultdach ? 1 : 0.5);
+  const mitteSlopeMM = (spannweiteMM / 2) / cosAReal;
   const xMitte = Math.min(
     startX + (ueberstand + mitteSlopeMM) * scale,
     startX + drawLen - slant - slantT - sohleLen - 10,
@@ -147,8 +171,8 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
           `${startX + slant},${yT} ` +                           // oben links (Zierschnitt-Kopf)
           `${startX + drawLen},${yT} ` +                         // oben rechts = FIRSTPUNKT (Oberkante erreicht den First)
           `${startX + drawLen - slant},${yB} ` +                 // unten rechts (Firstschnitt-Fuß, um h·tanα zurück)
-          (hatMittelpfette ? `${kerbe(xMitte)} ` : '') +         // Kerve Mittelpfette (nur wenn statisch vorhanden)
-          `${kerbe(xFuss)} ` +                                   // Kerve Fußpfette (Mauerbank)
+          (hatMittelpfette && kerveNoetig ? `${kerbe(xMitte)} ` : '') +  // Kerve Mittelpfette (nur wenn statisch vorhanden)
+          (kerveNoetig ? `${kerbe(xFuss)} ` : '') +              // Kerve Fußpfette (Mauerbank)
           `${startX},${yB}`                                      // unten links (Zierschnitt-Fuß, Unterkante ragt talwärts vor)
         }
         fill="url(#wood-sp)"
@@ -159,12 +183,18 @@ function SparrenDetail({ member, roofPitchDeg, geom }: { member: TimberMember; r
       {/* Schnitte beschriften (kollisionsfrei: oben links/rechts, Kerven unten) */}
       <text x={startX + drawLen} y={yT - 8} fontSize={11} fill="#dc2626" textAnchor="end">Firstschnitt (Schmiege α={alpha}°)</text>
       <text x={startX + slant + 4} y={yT - 8} fontSize={11} fill="#dc2626">Zierschnitt Traufe</text>
-      <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-        Kerve Fußpfette t = {Math.round(Math.min(h / 4, 40))} mm
-      </text>
-      {hatMittelpfette && (
+      {kerveNoetig ? (
+        <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+          Kerve Fußpfette t = {Math.round(kerveTiefeMM)} mm (Sohle {pfettenBreiteMM} mm)
+        </text>
+      ) : (
+        <text x={xFuss} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
+          Auflager Fußpfette — bei {alpha}° keine Kerve, Sparren liegt flach auf und wird verankert
+        </text>
+      )}
+      {hatMittelpfette && kerveNoetig && (
         <text x={xMitte} y={yB + 18} fontSize={11} fill="#0891b2" textAnchor="middle">
-          Kerve Mittelpfette
+          Kerve Mittelpfette t = {Math.round(kerveTiefeMM)} mm
         </text>
       )}
 
@@ -632,6 +662,14 @@ export function AbbundOverview({ members, roofPitchDeg, geom }: AbbundOverviewPr
     stuetzenProPfette: geom?.stuetzenProPfette
       ?? (nTragpfetten > 0 ? Math.round(stuetzenQty / nTragpfetten) : 0),
     hasKopfband: geom?.hasKopfband ?? members.some(m => m.type === 'rahm'),
+    // Diese beiden MÜSSEN durchgereicht werden: die Dachform entscheidet, ob der
+    // Sparren über die halbe oder die volle Gebäudebreite spannt (und damit, wo
+    // die Mittelpfetten-Kerve sitzt), und die Pfettenbreite bestimmt Länge und
+    // Tiefe der Kerve. Wurden sie hier vergessen, zeichnete der Abbundplan das
+    // Pultdach wie ein Satteldach.
+    isPultdach: geom?.isPultdach ?? false,
+    pfettenBreite: geom?.pfettenBreite
+      ?? (tragpfette?.width ?? mauerbank?.width ?? 120),
   };
 
   const grouped: { key: string; label: string; member: TimberMember }[] = [];

@@ -3,6 +3,7 @@
  * REAL-DATA-ONLY: Prüft auf Vollständigkeit, Konsistenz und fehlende Bestätigungen.
  */
 import type { Project, ValidationIssue, StatusLevel } from '@/types/project';
+import { TIMBER_CLASSES } from '@/lib/calc/materials';
 
 let issueCounter = 0;
 function makeIssue(
@@ -104,9 +105,19 @@ export function runFullValidation(project: Project): ValidationIssue[] {
   if (project.members.length === 0) {
     issues.push(makeIssue('red', 'Bauteile', 'Keine Bauteile definiert – Bemessung nicht möglich.', 'members', 'Bauteile im Tab „Tragwerk" oder „Materialien" anlegen.'));
   } else {
-    const withoutMaterial = project.members.filter(m => !project.materials.find(mat => mat.id === m.material));
+    // Das Feld `material` eines Bauteils ist die FESTIGKEITSKLASSE (C24, GL24h),
+    // nicht die ID eines Materialprofils. Vorher wurde es gegen project.materials
+    // geprüft — diese Liste ist im Normalfall leer, und damit galt JEDES Bauteil
+    // als "ohne gültiges Material". Das war ein Dauer-Blocker ohne echten Mangel.
+    const withoutMaterial = project.members.filter(
+      m => !m.material || !TIMBER_CLASSES[m.material],
+    );
     if (withoutMaterial.length > 0) {
-      issues.push(makeIssue('red', 'Bauteile', `${withoutMaterial.length} Bauteil(e) ohne gültiges Material.`, 'members'));
+      issues.push(makeIssue(
+        'red', 'Bauteile',
+        `${withoutMaterial.length} Bauteil(e) ohne gültige Festigkeitsklasse (${withoutMaterial.map(m => m.name).join(', ')}).`,
+        'members', 'Festigkeitsklasse im Tab „Materialien" setzen (z.B. C24 für KVH, GL24h für BSH).',
+      ));
     }
   }
 
